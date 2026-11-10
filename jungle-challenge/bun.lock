@@ -6,6 +6,7 @@
       "name": "jungle-challenge",
       "dependencies": {
         "@mikro-orm/core": "^7.2.8",
+        "@mikro-orm/decorators": "^7.2.8",
         "@mikro-orm/migrations": "^7.2.8",
         "@mikro-orm/nestjs": "^7.1.0",
         "@mikro-orm/postgresql": "^7.2.8",
@@ -218,6 +219,8 @@
     "@lukeed/csprng": ["@lukeed/csprng@1.1.0", "", {}, "sha512-Z7C/xXCiGWsg0KuKsHTKJxbWhpI3Vs5GwLfOean7MGyVFGqdRgBbAjOCh6u4bbjPc/8MJ2pZmK/0DLdCbivLDA=="],
 
     "@mikro-orm/core": ["@mikro-orm/core@7.2.8", "", { "peerDependencies": { "dataloader": "2.2.3" }, "optionalPeers": ["dataloader"] }, "sha512-9E7wApevmNrqswey8pVT65nyBz1ejOafcdyHV2aKU9FmxnWr/MbfOVNlnpMe6D3+r+wsrVyx3dBJ0mHqTYQTCw=="],
+
+    "@mikro-orm/decorators": ["@mikro-orm/decorators@7.2.8", "", { "peerDependencies": { "@mikro-orm/core": "7.2.8", "reflect-metadata": "^0.1.0 || ^0.2.0" }, "optionalPeers": ["reflect-metadata"] }, "sha512-Upgi818X+7o/kXPBDbz3sN0SFxVehBtUm2pt9bgqWSqJiTGRy3dF+yCXWUherxm4lIttf3k4EdPZ5k2PYsvM4Q=="],
 
     "@mikro-orm/migrations": ["@mikro-orm/migrations@7.2.8", "", { "dependencies": { "@mikro-orm/sql": "7.2.8" }, "peerDependencies": { "@mikro-orm/core": "7.2.8" } }, "sha512-6yw3/qW0fpuPwfnq9LxXaEtkaq21dngPoP4jpKMd9EzdUvChZmmNtqxHHl2Mp9e7+K/ihFKH9jd9wNgK7Y6iNA=="],
 
