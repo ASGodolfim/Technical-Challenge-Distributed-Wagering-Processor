@@ -3,7 +3,7 @@ import { Migrator } from '@mikro-orm/migrations';
 
 export default defineConfig({
     host: 'localhost',
-    port: 5432,
+    port: 5433,
     user: 'jungle_user',
     password: 'jungle_password',
     dbName: 'jungle_db',

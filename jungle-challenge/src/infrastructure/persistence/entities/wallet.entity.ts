@@ -17,7 +17,7 @@ export class WalletEntity {
     @Property({ type: 'numeric', precision: 14, scale: 2, fieldName: 'balance_amount' })
     balanceAmount!: string;
 
-    @Property({ version: true })
+    @Property({ type: 'integer', version: true })
     version!: number;
 
     @Property({ type: 'timestamptz', fieldName: 'created_at', onCreate: () => new Date() })
