@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@mikro-orm/core": "^7.2.8",
+    "@mikro-orm/migrations": "^7.2.8",
+    "@mikro-orm/nestjs": "^7.1.0",
+    "@mikro-orm/postgresql": "^7.2.8",
+    "decimal.js": "^10.6.0"
+  }
+}
