@@ -6,6 +6,7 @@ import { WalletLedgerEntryEntity } from '../../infrastructure/persistence/entiti
 import { OutboxMessageEntity } from '../../infrastructure/persistence/entities/outbox-message.entity';
 import { Money } from '../../domain/money';
 import { WalletBalanceChangedEvent } from '../../domain/events/wallet-balance-changed.event';
+import { WagerTransactionPendingReferenceEvent } from '../../domain/events/wager-pending-reference.event';
 import { ProcessWagerDto, ProcessWagerResult } from '../dtos/wager.dto';
 import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
@@ -58,28 +59,21 @@ export class WagerService {
             let newBalance = currentBalance;
             let direction: 'DEBIT' | 'CREDIT' | null = null;
 
-
             if (dto.kind === 'BET') {
                 if (currentBalance.subtract(operationMoney).isNegative()) {
                     return this.rejectTransaction(em, dto, wallet, currentBalance, payloadHash, 'INSUFFICIENT_FUNDS');
                 }
                 newBalance = currentBalance.subtract(operationMoney);
                 direction = 'DEBIT';
-            }
-
-            else if (dto.kind === 'WIN') {
+            } else if (dto.kind === 'WIN') {
                 newBalance = currentBalance.add(operationMoney);
                 direction = 'CREDIT';
-            }
-
-            else if (dto.kind === 'LOSS') {
+            } else if (dto.kind === 'LOSS') {
                 newBalance = currentBalance;
                 direction = null;
-            }
-
-            else if (dto.kind === 'REFUND') {
+            } else if (dto.kind === 'REFUND' || dto.kind === 'ROLLBACK') {
                 if (!dto.referenceExternalTransactionId) {
-                    throw new BadRequestException('referenceExternalTransactionId é obrigatório para operações de REFUND.');
+                    throw new BadRequestException(`referenceExternalTransactionId é obrigatório para operações de ${dto.kind}.`);
                 }
 
                 const refTx = await em.findOne(WagerTransactionEntity, {
@@ -88,45 +82,60 @@ export class WagerService {
                 });
 
                 if (!refTx) {
-                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' não foi encontrada.`);
+                    return this.handlePendingReference(em, dto, wallet, currentBalance, payloadHash);
                 }
 
-                if (refTx.kind !== 'BET') {
-                    throw new BadRequestException(`Operação de REFUND inválida. Transação de referência é do tipo '${refTx.kind}', mas deve ser 'BET'.`);
+                if (refTx.status !== 'PROCESSED') {
+                    throw new BadRequestException(
+                        `A transação de referência '${dto.referenceExternalTransactionId}' está com status '${refTx.status}' (deve ser PROCESSED).`,
+                    );
                 }
 
-                newBalance = currentBalance.add(operationMoney);
-                direction = 'CREDIT';
-            }
-
-            else if (dto.kind === 'ROLLBACK') {
-                if (!dto.referenceExternalTransactionId) {
-                    throw new BadRequestException('referenceExternalTransactionId é obrigatório para operações de ROLLBACK.');
+                if (
+                    refTx.walletId !== dto.walletId ||
+                    refTx.playerId !== dto.playerId ||
+                    refTx.currency !== dto.currency ||
+                    refTx.roundId !== dto.roundId
+                ) {
+                    throw new BadRequestException(
+                        `Atributos da transação de referência divergentes (wallet, player, currency ou roundId).`,
+                    );
                 }
 
-                const refTx = await em.findOne(WagerTransactionEntity, {
+                const alreadyReversed = await em.findOne(WagerTransactionEntity, {
                     providerId: dto.providerId,
-                    externalTransactionId: dto.referenceExternalTransactionId,
+                    referenceExternalTransactionId: dto.referenceExternalTransactionId,
+                    status: 'PROCESSED',
                 });
 
-                if (!refTx) {
-                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' não foi encontrada.`);
+                if (alreadyReversed) {
+                    throw new BadRequestException(
+                        `A transação de referência '${dto.referenceExternalTransactionId}' já foi revertida previamente pela transação '${alreadyReversed.externalTransactionId}'.`,
+                    );
                 }
 
-                const allowedKinds = ['BET', 'WIN', 'REFUND'];
-                if (!allowedKinds.includes(refTx.kind)) {
-                    throw new BadRequestException(`Operação de ROLLBACK inválida. Transação de referência do tipo '${refTx.kind}' não é permitida. Permita apenas: BET, WIN ou REFUND.`);
-                }
-
-                if (refTx.kind === 'BET') {
+                if (dto.kind === 'REFUND') {
+                    if (refTx.kind !== 'BET') {
+                        throw new BadRequestException(`REFUND só pode ser aplicado a transações BET (encontrado: '${refTx.kind}').`);
+                    }
                     newBalance = currentBalance.add(operationMoney);
                     direction = 'CREDIT';
                 } else {
-                    if (currentBalance.subtract(operationMoney).isNegative()) {
-                        return this.rejectTransaction(em, dto, wallet, currentBalance, payloadHash, 'INSUFFICIENT_FUNDS');
+                    const allowedKinds = ['BET', 'WIN', 'REFUND'];
+                    if (!allowedKinds.includes(refTx.kind)) {
+                        throw new BadRequestException(`ROLLBACK só pode ser aplicado a BET, WIN ou REFUND (encontrado: '${refTx.kind}').`);
                     }
-                    newBalance = currentBalance.subtract(operationMoney);
-                    direction = 'DEBIT';
+
+                    if (refTx.kind === 'BET') {
+                        newBalance = currentBalance.add(operationMoney);
+                        direction = 'CREDIT';
+                    } else {
+                        if (currentBalance.subtract(operationMoney).isNegative()) {
+                            return this.rejectTransaction(em, dto, wallet, currentBalance, payloadHash, 'INSUFFICIENT_FUNDS_FOR_ROLLBACK');
+                        }
+                        newBalance = currentBalance.subtract(operationMoney);
+                        direction = 'DEBIT';
+                    }
                 }
             }
 
@@ -201,6 +210,63 @@ export class WagerService {
                 currency: dto.currency,
             };
         });
+    }
+
+    private async handlePendingReference(
+        em: EntityManager,
+        dto: ProcessWagerDto,
+        wallet: WalletEntity,
+        currentBalance: Money,
+        payloadHash: string,
+    ): Promise<ProcessWagerResult> {
+        const txId = crypto.randomUUID();
+        const pendingTx = em.create(WagerTransactionEntity, {
+            id: txId,
+            providerId: dto.providerId,
+            externalTransactionId: dto.externalTransactionId,
+            idempotencyKey: dto.idempotencyKey,
+            payloadHash,
+            walletId: wallet.id,
+            playerId: dto.playerId,
+            roundId: dto.roundId,
+            gameId: dto.gameId,
+            kind: dto.kind,
+            moneyAmount: Money.from({ amount: dto.amount, currency: dto.currency }).toJSON().amount,
+            currency: dto.currency,
+            referenceExternalTransactionId: dto.referenceExternalTransactionId,
+            status: 'PENDING_REFERENCE',
+            processedAt: new Date(),
+        });
+        await em.persist(pendingTx);
+
+        const pendingEvent = new WagerTransactionPendingReferenceEvent(wallet.id, dto.correlationId ?? txId, {
+            transactionId: txId,
+            providerId: dto.providerId,
+            externalTransactionId: dto.externalTransactionId,
+            referenceExternalTransactionId: dto.referenceExternalTransactionId!,
+            walletId: wallet.id,
+            playerId: dto.playerId,
+            kind: dto.kind,
+            amount: dto.amount,
+            currency: dto.currency,
+        });
+
+        const outboxMsg = em.create(OutboxMessageEntity, {
+            aggregateId: wallet.id,
+            eventType: pendingEvent.eventType,
+            payload: pendingEvent.toJSON(),
+            occurredAt: pendingEvent.occurredAt,
+            attempts: 0,
+        });
+        await em.persist(outboxMsg);
+        await em.flush();
+
+        return {
+            transactionId: txId,
+            status: 'PENDING_REFERENCE',
+            balanceAmount: currentBalance.toJSON().amount,
+            currency: dto.currency,
+        };
     }
 
     private async rejectTransaction(

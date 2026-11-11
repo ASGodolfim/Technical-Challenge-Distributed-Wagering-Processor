@@ -1,4 +1,5 @@
 export type WagerTransactionKind = 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
+export type WagerTransactionStatus = 'PROCESSED' | 'REJECTED' | 'PENDING_REFERENCE';
 
 export interface ProcessWagerDto {
     providerId: string;
@@ -17,7 +18,7 @@ export interface ProcessWagerDto {
 
 export interface ProcessWagerResult {
     transactionId: string;
-    status: 'PROCESSED' | 'REJECTED';
+    status: WagerTransactionStatus;
     balanceAmount: string;
     currency: string;
     failureCode?: string;
