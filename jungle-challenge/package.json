@@ -22,6 +22,7 @@
     "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1166.0",
     "@mikro-orm/core": "^7.2.8",
     "@mikro-orm/decorators": "^7.2.8",
     "@mikro-orm/migrations": "^7.2.8",
@@ -31,6 +32,7 @@
     "@nestjs/core": "^12.0.1",
     "@nestjs/observe": "^0.3.0",
     "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/schedule": "^12.0.3",
     "decimal.js": "^10.6.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

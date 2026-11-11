@@ -8,9 +8,12 @@ import { InboxMessageEntity } from './infrastructure/persistence/entities/inbox-
 import { OutboxMessageEntity } from './infrastructure/persistence/entities/outbox-message.entity';
 import { WagerService } from './application/services/wager.service';
 import { WagerController } from './infrastructure/http/wager.controller';
+import { OutboxRelayService } from './infrastructure/messaging/outbox-relay.service';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     MikroOrmModule.forRoot(mikroOrmConfig),
     MikroOrmModule.forFeature([
       WalletEntity,
@@ -21,6 +24,6 @@ import { WagerController } from './infrastructure/http/wager.controller';
     ]),
   ],
   controllers: [WagerController],
-  providers: [WagerService],
+  providers: [WagerService, OutboxRelayService],
 })
 export class AppModule { }
