@@ -1,126 +1,117 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Distributed Wagering Processor
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Motor distribuído, idempotente e resiliente para processamento de transações de apostas (`BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`, `OPENING`) e gestão de carteiras digitais com consistência contábil estrita.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Para detalhes aprofundados sobre decisões arquiteturais, locking, mapeamento ORM, taxonomia de erros e observabilidade, consulte [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Principais Garantias & Arquitetura
 
-## Project setup
+- **Precisão Financeira & Ledger Imutável:** Value Object `Money` operando exclusivamente em centavos inteiros (`cents`), eliminando erros de ponto flutuante. Toda movimentação de saldo gera um lançamento imutável (`CREDIT` ou `DEBIT`) em `wallet_ledger_entries`, assegurando a invariante `wallet.balance == SUM(CREDIT) - SUM(DEBIT)`.
+- **Concorrência & Idempotência:** Serialização por carteira via **Pessimistic Locking (`SELECT ... FOR UPDATE`)** no PostgreSQL combinada com dupla checagem de idempotência (pré-lock e pós-lock) por `Idempotency-Key` e `(providerId, externalTransactionId)`.
+- **Resiliência Assíncrona (Outbox & Inbox):**
+  - **Transactional Outbox:** Eventos padronizados via `IntegrationEvent<T>` (`WagerTransactionProcessed`, `WagerTransactionRejected`, `WalletBalanceChanged`, `WagerTransactionPendingReference`) gravados na mesma transação SQL da operação.
+  - **Worker de Reprocessamento (`PENDING_REFERENCE`):** Resolução assíncrona com backoff exponencial (`2s, 4s, 8s, 16s, 32s`) para reversões que chegam fora de ordem, marcando como `REJECTED` ao atingir o limite de tentativas.
+  - **Inbox Pattern Idempotente:** Deduplicação transacional no consumidor SQS pela chave composta `(consumerName, messageId)`.
+- **Observabilidade Segura:** Logs estruturados em JSON (`StructuredLogger`) com propagação automática de `correlationId`, `walletId`, `transactionId` e `providerId` via `AsyncLocalStorage`, filtrando campos monetários sensíveis.
 
-```bash
-$ bun install
+---
+
+## Stack Tecnológica
+
+- **Runtime & Testes:** Bun (`bun test`)
+- **Framework:** NestJS (TypeScript, arquitetura DDD em camadas)
+- **Persistência & ORM:** PostgreSQL + MikroORM (migrações e `LockMode.PESSIMISTIC_WRITE`)
+- **Mensageria:** AWS SQS (ElasticMQ via Docker Compose)
+
+---
+
+## Estrutura do Projeto
+
+```text
+src/
+├── domain/                  # Regras financeiras puras, Money, WagerTransactionKind e IntegrationEvent<T>
+├── application/             # Casos de uso transacionais (WagerService, WalletService) e DTOs
+└── infrastructure/
+    ├── persistence/         # Entidades MikroORM e migrações PostgreSQL
+    ├── http/                # Controllers REST, AuthGuard (no-op) e decorator @Public()
+    ├── messaging/           # OutboxRelayService, SqsConsumerService e PendingReferenceWorkerService
+    └── observability/       # CorrelationMiddleware, AsyncLocalStorage e StructuredLogger JSON
+test/
+├── domain/                  # Testes unitários das regras de domínio e eventos
+├── unit/                    # Testes de backoff, envelope Outbox/Inbox, AuthGuard e sanitização de logs
+└── integration/             # Testes E2E com containers reais (concorrência, multi-instância e crash recovery)
 ```
 
-## Compile and run the project
+---
 
+## Como Executar
+
+### 1. Pré-requisitos
+- [Bun](https://bun.sh/) instalado (`v1.1+`)
+- [Docker](https://www.docker.com/) e Docker Compose ativos
+
+### 2. Instalação e Infraestrutura
 ```bash
-# development
-$ bun run start
+# Instalar dependências
+bun install
 
-# watch mode
-$ bun run start:dev
+# Subir PostgreSQL e ElasticMQ (SQS local)
+docker compose up -d
 
-# production mode
-$ bun run start:prod
+# Aplicar migrações no banco de dados
+bunx mikro-orm migration:up
 ```
 
-## Run tests
-
+### 3. Iniciar a Aplicação
 ```bash
-# unit tests
-$ bun run test
+# Modo desenvolvimento (watch)
+bun run start:dev
 
-# e2e tests
-$ bun run test:e2e
-
-# test coverage
-$ bun run test:cov
+# Build e execução em produção
+bun run build
+bun run start:prod
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Endpoints da API
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### Carteiras & Reconciliação
+| Método | Rota | Descrição |
+| :--- | :--- | :--- |
+| `POST` | `/wallets` | Cria uma carteira (`playerId` e `initialBalance` opcional; gera transação `OPENING` + `CREDIT` se `> 0`). |
+| `GET` | `/wallets/:walletId` | Consulta o saldo atual e metadados da carteira. |
+| `GET` | `/wallets/:walletId/ledger?cursor=...&limit=50` | Extrato paginado por cursor opaco em Base64. |
+| `POST` | `/wallets/:walletId/reconciliation` | Compara `storedBalance` com a soma calculada do ledger (`consistent: boolean`). |
+
+### Transações de Apostas (Wagering)
+| Método | Rota | Descrição |
+| :--- | :--- | :--- |
+| `POST` | `/wagering/transactions` | Processa `BET`, `WIN`, `LOSS`, `REFUND` ou `ROLLBACK`. Exige header `Idempotency-Key` e retorna `balance` + `idempotentReplay`. |
+| `GET` | `/wagering/transactions/:transactionId` | Consulta transação pelo ID interno. |
+| `GET` | `/providers/:providerId/wagering/transactions/:externalTransactionId` | Consulta transação pelo identificador externo do provedor. |
+
+### Health Checks (Públicos / `@Public()`)
+| Método | Rota | Descrição |
+| :--- | :--- | :--- |
+| `GET` | `/health/live` | Verifica se o processo HTTP está ativo. |
+| `GET` | `/health/ready` | Valida conexão ativa com PostgreSQL e fila SQS. |
+
+---
+
+## Suíte de Testes (`bun test`)
+
+Com os containers do Docker ativos (`docker compose up -d`) e migrações aplicadas, execute:
 
 ```bash
-$ bun install -g @nestjs/mau
-$ mau deploy
+bun test
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-This project is already instrumented. To connect it, run this and approve the code it prints at [observe.nestjs.com/link](https://observe.nestjs.com/link) - signing up for free if you have no account:
-
-```bash
-$ npx @nestjs/observe link
-```
-
-It writes the app key and secret into `.env` and makes every `nest start` script (`start`, `start:dev`, `start:debug`) load it. In production, set `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment instead.
-
-Or do it by hand: create an application and an API key at [observe.nestjs.com](https://observe.nestjs.com), and set the pair as `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment the app runs in.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+A suíte valida:
+- **Regras de Domínio & Eventos:** Aritmética de `Money`, comportamento `LOSS` sem impacto no saldo, reversões (`REFUND`/`ROLLBACK`), backoff exponencial e sanitização de logs JSON.
+- **Concorrência Real (50x Burst):** 50 requisições simultâneas idênticas gerando exatamente 1 débito e 49 `idempotentReplay: true`.
+- **Race Condition de Saldo:** Saldo de `R$ 100,00` disputado por duas apostas simultâneas de `R$ 80,00` (`1 PROCESSED`, `1 REJECTED` por `INSUFFICIENT_FUNDS`, saldo final `20.00`).
+- **Multi-Instância:** 3 instâncias NestJS independentes disputando a mesma carteira em paralelo sem *lost updates*.
+- **Crash Recovery & Invariante Contábil:** Simulação de indisponibilidade do SQS e falha do worker antes do ACK, verificando `wallet.balance == soma do ledger` ao final de todos os cenários.
