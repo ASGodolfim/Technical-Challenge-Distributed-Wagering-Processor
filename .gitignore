@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Build & Compiled output
+/dist
+/build
+*.tsbuildinfo
+
+# Environment & Secrets (Crítico para não vazar credenciais)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cobertura de Testes
+/coverage
+/.nyc_output
+
+# IDE e Sistema Operacional
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Cache do ORM e arquivos temporários
+.mikro-orm/
+*.tmp

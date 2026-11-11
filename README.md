@@ -1,163 +1,126 @@
-# Technical-Challenge-Distributed-Wagering-Processor
+<p align="center">
+  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+</p>
 
-# 🎰 Distributed Wagering Processor
+[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
+[circleci-url]: https://circleci.com/gh/nestjs/nest
 
-Processador distribuído de apostas e carteira digital de alta performance construído com **NestJS**, **TypeScript**, **MikroORM**, **PostgreSQL** e **ElasticMQ (SQS)**, projetado para suportar alta concorrência, consistência financeira rigorosa e publicação confiável de eventos.
+  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
+    <p align="center">
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
+<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
+<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
+<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
+<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
+  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
+    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
+  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
+</p>
+  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
+  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
----
+## Description
 
-## 🛠️ Tecnologias e Ferramentas
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
-* **Runtime:** [Bun](https://bun.sh/) (Executor e Test Runner nativo)
-* **Framework Backend:** NestJS + TypeScript
-* **ORM & Database:** MikroORM + PostgreSQL 16
-* **Mensageria:** AWS SDK (SQS Client) + ElasticMQ (Emulador SQS leve)
-* **Containerização:** Docker & Docker Compose
+## Project setup
 
----
-
-## 🏗️ Arquitetura e Padrões de Projeto
-
-O sistema adota os princípios de **Domain-Driven Design (DDD)** e **Arquitetura Hexagonal (Ports & Adapters)**:
-
-1. **Pessimistic Locking (`LockMode.PESSIMISTIC_WRITE`):**
-   Garante execução atômica sobre `WalletEntity` durante o ciclo financeiro via consulta SQL `FOR UPDATE`. Previne *race conditions* e garante isolamento em concorrência simultânea.
-
-2. **Value Object (`Money`):**
-   Encapsula e isola todas as operações matemáticas manipulando os montantes como inteiros em centavos (*integer cents*). Elimina completamente os problemas de imprecisão de ponto flutuante inerentes ao JavaScript/TypeScript.
-
-3. **Transactional Outbox Pattern:**
-   Garante a consistência eventual (*eventual consistency*) e resiliência de mensagens. O evento `WalletBalanceChangedEvent` é persistido na tabela `outbox_messages` dentro da mesma transação do banco de dados. O worker `OutboxRelayService` pesquisa assincronamente as mensagens pendentes e as despacha para a fila SQS.
-
-4. **Inbox Pattern (Consumer Deduplication):**
-   O `SqsConsumerService` consome as mensagens da fila SQS e valida seu `messageId` na tabela `inbox_messages` antes do processamento. Isso garante idempotência no consumo contra entregas duplicadas do broker (*at-least-once delivery*).
-
-5. **Idempotência de API:**
-   Chaves de idempotência dinâmicas (`idempotencyKey` e a combinação `providerId` + `externalTransactionId`) com verificação por hash de payload (SHA-256). Previne que reenvios acidentais alterem o saldo ou gerem transações duplicadas.
-
----
-
-## 📂 Estrutura de Pastas
-
-```text
-src/
-├── application/
-│   ├── dtos/                # Data Transfer Objects
-│   └── services/            # WagerService (Caso de Uso Principal)
-├── domain/
-│   ├── events/              # Eventos de Domínio (WalletBalanceChangedEvent)
-│   └── money.ts             # Money Value Object (Precisão Decimal)
-└── infrastructure/
-    ├── database/            # Script de Seed e Migrações
-    ├── http/                # WagerController (REST API)
-    ├── messaging/           # OutboxRelayService, SqsConsumerService e cliente SQS
-    └── persistence/         # Entidades do MikroORM (Wallet, Ledger, Inbox, Outbox, Tx)
-```
-
----
-
-## 🚀 Como Executar o Projeto
-
-### 1. Pré-requisitos
-* [Bun](https://bun.sh/) instalado (v1.1+)
-* Docker e Docker Compose em execução
-
-### 2. Clonar e Instalar Dependências
 ```bash
-bun install
+$ bun install
 ```
-### 3. Entrar na pasta para a execução do projeto
+
+## Compile and run the project
+
 ```bash
-cd jungle-challenge
+# development
+$ bun run start
+
+# watch mode
+$ bun run start:dev
+
+# production mode
+$ bun run start:prod
 ```
 
-### 4. Subir a Infraestrutura (PostgreSQL + ElasticMQ SQS)
+## Run tests
+
 ```bash
-docker compose up -d
+# unit tests
+$ bun run test
+
+# e2e tests
+$ bun run test:e2e
+
+# test coverage
+$ bun run test:cov
 ```
 
-### 5. Executar Migrações do Banco de Dados
+## Deployment
+
+When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+
+If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+
 ```bash
-bunx mikro-orm migration:up
+$ bun install -g @nestjs/mau
+$ mau deploy
 ```
 
-### 6. Semear Dados Iniciais (Carteira de Teste)
+With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+
+## Observability
+
+In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+
+[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+
+- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
+- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
+- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
+- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
+- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
+- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
+- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
+- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+
+This project is already instrumented. To connect it, run this and approve the code it prints at [observe.nestjs.com/link](https://observe.nestjs.com/link) - signing up for free if you have no account:
+
 ```bash
-bun run src/infrastructure/database/seed.ts
+$ npx @nestjs/observe link
 ```
 
-### 7. Iniciar a Aplicação NestJS
-```bash
-bun run start:dev
-```
-A API estará rodando em `http://localhost:3000`.
+It writes the app key and secret into `.env` and makes every `nest start` script (`start`, `start:dev`, `start:debug`) load it. In production, set `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment instead.
 
----
+Or do it by hand: create an application and an API key at [observe.nestjs.com](https://observe.nestjs.com), and set the pair as `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment the app runs in.
 
-## 🧪 Suíte de Testes
+The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
 
-### Testes Unitários (`bun test`)
-Cobre as regras de domínio do `Money` Value Object:
-```bash
-bun test
-```
+## Resources
 
-### Testes End-to-End (E2E) via PowerShell
-Com a aplicação em execução (`bun run start:dev`), abra uma nova janela do PowerShell e execute o script abaixo para validar todas as regras em lote (`BET`, `WIN`, `ROLLBACK`, `Idempotência` e `Saldo Insuficiente`):
+Check out a few resources that may come in handy when working with NestJS:
 
-```powershell
-$baseUrl = "http://localhost:3000/v1/wagers"
-$walletId = "22222222-2222-2222-2222-222222222222"
-$playerId = "11111111-1111-1111-1111-111111111111"
+- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
+- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
+- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
+- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
+- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
+- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
+- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
+- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
+- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
 
-# 1. BET (Débito de R$ 50.00)
-$betBody = @{ providerId="pragmatic"; externalTransactionId="tx-bet-100"; idempotencyKey="idem-bet-100"; playerId=$playerId; walletId=$walletId; roundId="round-1"; gameId="game-1"; kind="BET"; amount="50.00"; currency="BRL" } | ConvertTo-Json
-Invoke-RestMethod -Uri $baseUrl -Method Post -Body $betBody -ContentType "application/json"
+## Support
 
-# 2. Idempotência (Reenvio da mesma aposta)
-Invoke-RestMethod -Uri $baseUrl -Method Post -Body $betBody -ContentType "application/json"
+Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
 
-# 3. Saldo Insuficiente (Aposta de R$ 9.999.00 - Rejeição)
-$insufficientBody = @{ providerId="pragmatic"; externalTransactionId="tx-bet-999"; idempotencyKey="idem-bet-999"; playerId=$playerId; walletId=$walletId; roundId="round-1"; gameId="game-1"; kind="BET"; amount="9999.00"; currency="BRL" } | ConvertTo-Json
-Invoke-RestMethod -Uri $baseUrl -Method Post -Body $insufficientBody -ContentType "application/json"
+## Stay in touch
 
-# 4. WIN (Crédito de R$ 150.00)
-$winBody = @{ providerId="pragmatic"; externalTransactionId="tx-win-100"; idempotencyKey="idem-win-100"; playerId=$playerId; walletId=$walletId; roundId="round-1"; gameId="game-1"; kind="WIN"; amount="150.00"; currency="BRL" } | ConvertTo-Json
-Invoke-RestMethod -Uri $baseUrl -Method Post -Body $winBody -ContentType "application/json"
+- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
+- Website - [https://nestjs.com](https://nestjs.com/)
+- Twitter - [@nestframework](https://twitter.com/nestframework)
 
-# 5. ROLLBACK (Estorno de R$ 50.00)
-$rollbackBody = @{ providerId="pragmatic"; externalTransactionId="tx-rollback-100"; idempotencyKey="idem-rollback-100"; playerId=$playerId; walletId=$walletId; roundId="round-1"; gameId="game-1"; kind="ROLLBACK"; amount="50.00"; currency="BRL" } | ConvertTo-Json
-Invoke-RestMethod -Uri $baseUrl -Method Post -Body $rollbackBody -ContentType "application/json"
-```
+## License
 
----
-
-## 📑 Especificação do Endpoint
-
-### `POST /v1/wagers`
-
-#### Exemplo de Requisição:
-```json
-{
-  "providerId": "pragmatic",
-  "externalTransactionId": "tx-bet-001",
-  "idempotencyKey": "idem-bet-001",
-  "playerId": "11111111-1111-1111-1111-111111111111",
-  "walletId": "22222222-2222-2222-2222-222222222222",
-  "roundId": "round-999",
-  "gameId": "game-777",
-  "kind": "BET",
-  "amount": "50.00",
-  "currency": "BRL"
-}
-```
-
-#### Exemplo de Resposta (200 OK):
-```json
-{
-  "transactionId": "22d935b4-bcfe-416f-9f52-cb33170b0f69",
-  "status": "PROCESSED",
-  "balanceAmount": "450.00",
-  "currency": "BRL"
-}
-```
+Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).

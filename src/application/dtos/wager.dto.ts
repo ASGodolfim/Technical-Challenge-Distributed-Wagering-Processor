@@ -1,3 +1,5 @@
+export type WagerTransactionKind = 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
+
 export interface ProcessWagerDto {
     providerId: string;
     externalTransactionId: string;
@@ -6,8 +8,8 @@ export interface ProcessWagerDto {
     walletId: string;
     roundId: string;
     gameId: string;
-    kind: 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
-    amount: string; // Ex: "50.00"
+    kind: WagerTransactionKind;
+    amount: string;
     currency: string;
     referenceExternalTransactionId?: string;
     correlationId?: string;
@@ -15,7 +17,7 @@ export interface ProcessWagerDto {
 
 export interface ProcessWagerResult {
     transactionId: string;
-    status: 'PROCESSED' | 'REJECTED' | 'FAILED';
+    status: 'PROCESSED' | 'REJECTED';
     balanceAmount: string;
     currency: string;
     failureCode?: string;
