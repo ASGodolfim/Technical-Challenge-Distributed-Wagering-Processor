@@ -1,17 +1,17 @@
 import { MoneyDto } from './wager.dto';
 
-export interface CreateWalletDto {
-    playerId: string;
+export class CreateWalletDto {
+    playerId!: string;
     initialBalance?: MoneyDto;
 }
 
-export interface LedgerQueryDto {
+export class LedgerQueryDto {
     cursor?: string;
     limit?: string;
 }
 
-export interface PaginatedLedgerResponseDto {
-    data: Array<{
+export class PaginatedLedgerResponseDto {
+    data!: Array<{
         id: string;
         transactionId: string;
         direction: 'CREDIT' | 'DEBIT';
@@ -20,12 +20,12 @@ export interface PaginatedLedgerResponseDto {
         balanceAfter: MoneyDto;
         createdAt: string;
     }>;
-    nextCursor: string | null;
+    nextCursor!: string | null;
 }
 
-export interface ReconciliationResponseDto {
-    walletId: string;
-    storedBalance: MoneyDto;
-    calculatedLedgerBalance: MoneyDto;
-    consistent: boolean;
+export class ReconciliationResponseDto {
+    walletId!: string;
+    storedBalance!: MoneyDto;
+    calculatedLedgerBalance!: MoneyDto;
+    consistent!: boolean;
 }

@@ -37,7 +37,7 @@ export class WalletService {
                     payloadHash: 'system_opening',
                     walletId: wallet.id,
                     playerId: dto.playerId,
-                    roundId: 'opening-round',
+                    roundId: txId,
                     gameId: 'system',
                     kind: 'OPENING',
                     moneyAmount: initialMoney.toJSON().amount,

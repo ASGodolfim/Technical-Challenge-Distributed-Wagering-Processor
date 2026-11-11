@@ -1,6 +1,6 @@
 import { Money } from '../../src/domain/money';
 
-describe('Fase 2: Contratos HTTP e Estrutura de Resposta', () => {
+describe('Contratos HTTP e Estrutura de Resposta', () => {
     test('deve formatar objeto de moeda aninhado corretamente', () => {
         const money = Money.from({ amount: '25.00', currency: 'BRL' });
         expect(money.toJSON()).toEqual({ amount: '25.00', currency: 'BRL' });

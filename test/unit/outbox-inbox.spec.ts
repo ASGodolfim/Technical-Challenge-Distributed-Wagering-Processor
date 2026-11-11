@@ -2,7 +2,7 @@ import { WagerTransactionProcessedEvent } from '../../src/domain/events/wager-tr
 import { WagerTransactionRejectedEvent } from '../../src/domain/events/wager-transaction-rejected.event';
 import { PendingReferenceWorkerService } from '../../src/infrastructure/messaging/pending-reference-worker.service';
 
-describe('Fase 3: Envelope IntegrationEvent e Backoff Exponencial', () => {
+describe('Envelope IntegrationEvent e Backoff Exponencial', () => {
     test('deve preencher todos os campos obrigatórios de IntegrationEvent<T>', () => {
         const processed = new WagerTransactionProcessedEvent({
             aggregateId: 'tx-1',

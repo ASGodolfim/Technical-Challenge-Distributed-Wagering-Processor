@@ -64,6 +64,30 @@ export class WagerService {
                 throw new BadRequestException('Carteira não encontrada para o jogador informado.');
             }
 
+            const committedTxAfterLock = await em.findOne(WagerTransactionEntity, {
+                $or: [
+                    { idempotencyKey },
+                    { providerId: dto.providerId, externalTransactionId: dto.externalTransactionId },
+                ],
+            });
+
+            if (committedTxAfterLock) {
+                if (committedTxAfterLock.payloadHash !== payloadHash) {
+                    throw new ConflictException('Idempotency key reusada com payload diferente.');
+                }
+
+                return {
+                    transactionId: committedTxAfterLock.id,
+                    status: committedTxAfterLock.status as any,
+                    balance: {
+                        amount: wallet.balanceAmount,
+                        currency: committedTxAfterLock.currency,
+                    },
+                    idempotentReplay: true,
+                    failureCode: committedTxAfterLock.failureCode,
+                };
+            }
+
             const currentBalance = Money.from({ amount: wallet.balanceAmount, currency: wallet.currency });
             let newBalance = currentBalance;
             let direction: 'DEBIT' | 'CREDIT' | null = null;
