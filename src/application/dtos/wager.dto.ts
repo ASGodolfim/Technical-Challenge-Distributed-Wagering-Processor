@@ -1,25 +1,30 @@
-export type WagerTransactionKind = 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
+import { WagerTransactionKind } from '../../domain/wager-transaction.kind';
+
+export { WagerTransactionKind };
 export type WagerTransactionStatus = 'PROCESSED' | 'REJECTED' | 'PENDING_REFERENCE';
 
-export interface ProcessWagerDto {
+export interface MoneyDto {
+    amount: string;
+    currency: string;
+}
+
+export interface ProcessWagerRequestDto {
     providerId: string;
     externalTransactionId: string;
-    idempotencyKey: string;
     playerId: string;
     walletId: string;
     roundId: string;
     gameId: string;
     kind: WagerTransactionKind;
-    amount: string;
-    currency: string;
+    money: MoneyDto;
     referenceExternalTransactionId?: string;
     correlationId?: string;
 }
 
-export interface ProcessWagerResult {
+export interface ProcessWagerResponseDto {
     transactionId: string;
     status: WagerTransactionStatus;
-    balanceAmount: string;
-    currency: string;
+    balance: MoneyDto;
+    idempotentReplay: boolean;
     failureCode?: string;
 }

@@ -1,14 +1,29 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, Headers, Param } from '@nestjs/common';
 import { WagerService } from '../../application/services/wager.service';
-import { ProcessWagerDto, ProcessWagerResult } from '../../application/dtos/wager.dto';
+import { ProcessWagerRequestDto } from '../../application/dtos/wager.dto';
 
-@Controller('v1/wagers')
-export class WagerController {
+@Controller()
+export class WageringController {
     constructor(private readonly wagerService: WagerService) { }
 
-    @Post()
-    @HttpCode(HttpStatus.OK)
-    async processWager(@Body() dto: ProcessWagerDto): Promise<ProcessWagerResult> {
-        return await this.wagerService.processWager(dto);
+    @Post('/wagering/transactions')
+    async processTransaction(
+        @Headers('idempotency-key') idempotencyKey: string,
+        @Body() body: ProcessWagerRequestDto,
+    ) {
+        return await this.wagerService.processWager(body, idempotencyKey);
+    }
+
+    @Get('/wagering/transactions/:transactionId')
+    async getById(@Param('transactionId') transactionId: string) {
+        return await this.wagerService.getTransactionById(transactionId);
+    }
+
+    @Get('/providers/:providerId/wagering/transactions/:externalTransactionId')
+    async getByExternalId(
+        @Param('providerId') providerId: string,
+        @Param('externalTransactionId') externalTransactionId: string,
+    ) {
+        return await this.wagerService.getTransactionByExternalId(providerId, externalTransactionId);
     }
 }

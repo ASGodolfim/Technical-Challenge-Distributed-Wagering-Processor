@@ -7,7 +7,7 @@ import { OutboxMessageEntity } from '../../infrastructure/persistence/entities/o
 import { Money } from '../../domain/money';
 import { WalletBalanceChangedEvent } from '../../domain/events/wallet-balance-changed.event';
 import { WagerTransactionPendingReferenceEvent } from '../../domain/events/wager-pending-reference.event';
-import { ProcessWagerDto, ProcessWagerResult } from '../dtos/wager.dto';
+import { ProcessWagerRequestDto, ProcessWagerResponseDto } from '../dtos/wager.dto';
 import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
 
@@ -15,17 +15,21 @@ import * as crypto from 'crypto';
 export class WagerService {
     constructor(private readonly em: EntityManager) { }
 
-    async processWager(dto: ProcessWagerDto): Promise<ProcessWagerResult> {
-        const operationMoney = Money.from({ amount: dto.amount, currency: dto.currency });
+    async processWager(dto: ProcessWagerRequestDto, idempotencyKey: string): Promise<ProcessWagerResponseDto> {
+        if (!idempotencyKey) {
+            throw new BadRequestException('O header Idempotency-Key é obrigatório.');
+        }
+
+        const operationMoney = Money.from({ amount: dto.money.amount, currency: dto.money.currency });
         const payloadHash = crypto
             .createHash('sha256')
-            .update(JSON.stringify(dto))
+            .update(JSON.stringify({ ...dto, idempotencyKey }))
             .digest('hex');
 
         return await this.em.transactional(async (em) => {
             const existingTx = await em.findOne(WagerTransactionEntity, {
                 $or: [
-                    { idempotencyKey: dto.idempotencyKey },
+                    { idempotencyKey },
                     { providerId: dto.providerId, externalTransactionId: dto.externalTransactionId },
                 ],
             });
@@ -39,8 +43,11 @@ export class WagerService {
                 return {
                     transactionId: existingTx.id,
                     status: existingTx.status as any,
-                    balanceAmount: wallet?.balanceAmount ?? '0.00',
-                    currency: existingTx.currency,
+                    balance: {
+                        amount: wallet?.balanceAmount ?? '0.00',
+                        currency: existingTx.currency,
+                    },
+                    idempotentReplay: true,
                     failureCode: existingTx.failureCode,
                 };
             }
@@ -61,7 +68,7 @@ export class WagerService {
 
             if (dto.kind === 'BET') {
                 if (currentBalance.subtract(operationMoney).isNegative()) {
-                    return this.rejectTransaction(em, dto, wallet, currentBalance, payloadHash, 'INSUFFICIENT_FUNDS');
+                    return this.rejectTransaction(em, dto, wallet, currentBalance, idempotencyKey, payloadHash, 'INSUFFICIENT_FUNDS');
                 }
                 newBalance = currentBalance.subtract(operationMoney);
                 direction = 'DEBIT';
@@ -82,24 +89,20 @@ export class WagerService {
                 });
 
                 if (!refTx) {
-                    return this.handlePendingReference(em, dto, wallet, currentBalance, payloadHash);
+                    return this.handlePendingReference(em, dto, wallet, currentBalance, idempotencyKey, payloadHash);
                 }
 
                 if (refTx.status !== 'PROCESSED') {
-                    throw new BadRequestException(
-                        `A transação de referência '${dto.referenceExternalTransactionId}' está com status '${refTx.status}' (deve ser PROCESSED).`,
-                    );
+                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' não está PROCESSED.`);
                 }
 
                 if (
                     refTx.walletId !== dto.walletId ||
                     refTx.playerId !== dto.playerId ||
-                    refTx.currency !== dto.currency ||
+                    refTx.currency !== dto.money.currency ||
                     refTx.roundId !== dto.roundId
                 ) {
-                    throw new BadRequestException(
-                        `Atributos da transação de referência divergentes (wallet, player, currency ou roundId).`,
-                    );
+                    throw new BadRequestException(`Atributos da transação de referência divergentes.`);
                 }
 
                 const alreadyReversed = await em.findOne(WagerTransactionEntity, {
@@ -109,21 +112,19 @@ export class WagerService {
                 });
 
                 if (alreadyReversed) {
-                    throw new BadRequestException(
-                        `A transação de referência '${dto.referenceExternalTransactionId}' já foi revertida previamente pela transação '${alreadyReversed.externalTransactionId}'.`,
-                    );
+                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' já foi revertida.`);
                 }
 
                 if (dto.kind === 'REFUND') {
                     if (refTx.kind !== 'BET') {
-                        throw new BadRequestException(`REFUND só pode ser aplicado a transações BET (encontrado: '${refTx.kind}').`);
+                        throw new BadRequestException(`REFUND só pode ser aplicado a transações BET.`);
                     }
                     newBalance = currentBalance.add(operationMoney);
                     direction = 'CREDIT';
                 } else {
                     const allowedKinds = ['BET', 'WIN', 'REFUND'];
                     if (!allowedKinds.includes(refTx.kind)) {
-                        throw new BadRequestException(`ROLLBACK só pode ser aplicado a BET, WIN ou REFUND (encontrado: '${refTx.kind}').`);
+                        throw new BadRequestException(`ROLLBACK só pode ser aplicado a BET, WIN ou REFUND.`);
                     }
 
                     if (refTx.kind === 'BET') {
@@ -131,7 +132,7 @@ export class WagerService {
                         direction = 'CREDIT';
                     } else {
                         if (currentBalance.subtract(operationMoney).isNegative()) {
-                            return this.rejectTransaction(em, dto, wallet, currentBalance, payloadHash, 'INSUFFICIENT_FUNDS_FOR_ROLLBACK');
+                            return this.rejectTransaction(em, dto, wallet, currentBalance, idempotencyKey, payloadHash, 'INSUFFICIENT_FUNDS_FOR_ROLLBACK');
                         }
                         newBalance = currentBalance.subtract(operationMoney);
                         direction = 'DEBIT';
@@ -150,7 +151,7 @@ export class WagerService {
                 id: wagerTxId,
                 providerId: dto.providerId,
                 externalTransactionId: dto.externalTransactionId,
-                idempotencyKey: dto.idempotencyKey,
+                idempotencyKey,
                 payloadHash,
                 walletId: wallet.id,
                 playerId: dto.playerId,
@@ -158,7 +159,7 @@ export class WagerService {
                 gameId: dto.gameId,
                 kind: dto.kind,
                 moneyAmount: operationMoney.toJSON().amount,
-                currency: dto.currency,
+                currency: dto.money.currency,
                 referenceExternalTransactionId: dto.referenceExternalTransactionId,
                 status: 'PROCESSED',
                 processedAt: new Date(),
@@ -171,7 +172,7 @@ export class WagerService {
                     transactionId: wagerTxId,
                     direction,
                     moneyAmount: operationMoney.toJSON().amount,
-                    currency: dto.currency,
+                    currency: dto.money.currency,
                     balanceBefore: currentBalance.toJSON().amount,
                     balanceAfter: newBalance.toJSON().amount,
                 });
@@ -206,33 +207,49 @@ export class WagerService {
             return {
                 transactionId: wagerTxId,
                 status: 'PROCESSED',
-                balanceAmount: wallet.balanceAmount,
-                currency: dto.currency,
+                balance: {
+                    amount: wallet.balanceAmount,
+                    currency: dto.money.currency,
+                },
+                idempotentReplay: false,
             };
         });
     }
 
+    async getTransactionById(transactionId: string) {
+        const tx = await this.em.findOne(WagerTransactionEntity, { id: transactionId });
+        if (!tx) throw new BadRequestException('Transação não encontrada.');
+        return tx;
+    }
+
+    async getTransactionByExternalId(providerId: string, externalTransactionId: string) {
+        const tx = await this.em.findOne(WagerTransactionEntity, { providerId, externalTransactionId });
+        if (!tx) throw new BadRequestException('Transação externa não encontrada.');
+        return tx;
+    }
+
     private async handlePendingReference(
         em: EntityManager,
-        dto: ProcessWagerDto,
+        dto: ProcessWagerRequestDto,
         wallet: WalletEntity,
         currentBalance: Money,
+        idempotencyKey: string,
         payloadHash: string,
-    ): Promise<ProcessWagerResult> {
+    ): Promise<ProcessWagerResponseDto> {
         const txId = crypto.randomUUID();
         const pendingTx = em.create(WagerTransactionEntity, {
             id: txId,
             providerId: dto.providerId,
             externalTransactionId: dto.externalTransactionId,
-            idempotencyKey: dto.idempotencyKey,
+            idempotencyKey,
             payloadHash,
             walletId: wallet.id,
             playerId: dto.playerId,
             roundId: dto.roundId,
             gameId: dto.gameId,
             kind: dto.kind,
-            moneyAmount: Money.from({ amount: dto.amount, currency: dto.currency }).toJSON().amount,
-            currency: dto.currency,
+            moneyAmount: Money.from({ amount: dto.money.amount, currency: dto.money.currency }).toJSON().amount,
+            currency: dto.money.currency,
             referenceExternalTransactionId: dto.referenceExternalTransactionId,
             status: 'PENDING_REFERENCE',
             processedAt: new Date(),
@@ -247,8 +264,8 @@ export class WagerService {
             walletId: wallet.id,
             playerId: dto.playerId,
             kind: dto.kind,
-            amount: dto.amount,
-            currency: dto.currency,
+            amount: dto.money.amount,
+            currency: dto.money.currency,
         });
 
         const outboxMsg = em.create(OutboxMessageEntity, {
@@ -264,33 +281,37 @@ export class WagerService {
         return {
             transactionId: txId,
             status: 'PENDING_REFERENCE',
-            balanceAmount: currentBalance.toJSON().amount,
-            currency: dto.currency,
+            balance: {
+                amount: currentBalance.toJSON().amount,
+                currency: dto.money.currency,
+            },
+            idempotentReplay: false,
         };
     }
 
     private async rejectTransaction(
         em: EntityManager,
-        dto: ProcessWagerDto,
+        dto: ProcessWagerRequestDto,
         wallet: WalletEntity,
         currentBalance: Money,
+        idempotencyKey: string,
         payloadHash: string,
         failureCode: string,
-    ): Promise<ProcessWagerResult> {
+    ): Promise<ProcessWagerResponseDto> {
         const rejectedTxId = crypto.randomUUID();
         const rejectedTx = em.create(WagerTransactionEntity, {
             id: rejectedTxId,
             providerId: dto.providerId,
             externalTransactionId: dto.externalTransactionId,
-            idempotencyKey: dto.idempotencyKey,
+            idempotencyKey,
             payloadHash,
             walletId: wallet.id,
             playerId: dto.playerId,
             roundId: dto.roundId,
             gameId: dto.gameId,
             kind: dto.kind,
-            moneyAmount: Money.from({ amount: dto.amount, currency: dto.currency }).toJSON().amount,
-            currency: dto.currency,
+            moneyAmount: Money.from({ amount: dto.money.amount, currency: dto.money.currency }).toJSON().amount,
+            currency: dto.money.currency,
             referenceExternalTransactionId: dto.referenceExternalTransactionId,
             status: 'REJECTED',
             failureCode,
@@ -301,8 +322,11 @@ export class WagerService {
         return {
             transactionId: rejectedTx.id,
             status: 'REJECTED',
-            balanceAmount: currentBalance.toJSON().amount,
-            currency: dto.currency,
+            balance: {
+                amount: currentBalance.toJSON().amount,
+                currency: dto.money.currency,
+            },
+            idempotentReplay: false,
             failureCode,
         };
     }
