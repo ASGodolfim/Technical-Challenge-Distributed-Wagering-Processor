@@ -10,6 +10,7 @@ import { WagerService } from './application/services/wager.service';
 import { WagerController } from './infrastructure/http/wager.controller';
 import { OutboxRelayService } from './infrastructure/messaging/outbox-relay.service';
 import { ScheduleModule } from '@nestjs/schedule';
+import { SqsConsumerService } from './infrastructure/messaging/sqs-consumer.service';
 
 @Module({
   imports: [
@@ -24,6 +25,6 @@ import { ScheduleModule } from '@nestjs/schedule';
     ]),
   ],
   controllers: [WagerController],
-  providers: [WagerService, OutboxRelayService],
+  providers: [WagerService, OutboxRelayService, SqsConsumerService],
 })
 export class AppModule { }
