@@ -7,6 +7,7 @@ import { OutboxMessageEntity } from '../../infrastructure/persistence/entities/o
 import { Money } from '../../domain/money';
 import { WalletBalanceChangedEvent } from '../../domain/events/wallet-balance-changed.event';
 import { ProcessWagerDto, ProcessWagerResult } from '../dtos/wager.dto';
+import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -50,7 +51,7 @@ export class WagerService {
             );
 
             if (!wallet) {
-                throw new BadRequestException('Carteira não encontrada.');
+                throw new BadRequestException('Carteira não encontrada para o jogador informado.');
             }
 
             const currentBalance = Money.from({ amount: wallet.balanceAmount, currency: wallet.currency });
@@ -66,14 +67,14 @@ export class WagerService {
                 direction = 'DEBIT';
             }
 
-            else if (dto.kind === 'LOSS') {
-                newBalance = currentBalance;
-                direction = null;
-            }
-
             else if (dto.kind === 'WIN') {
                 newBalance = currentBalance.add(operationMoney);
                 direction = 'CREDIT';
+            }
+
+            else if (dto.kind === 'LOSS') {
+                newBalance = currentBalance;
+                direction = null;
             }
 
             else if (dto.kind === 'REFUND') {
@@ -87,11 +88,11 @@ export class WagerService {
                 });
 
                 if (!refTx) {
-                    throw new BadRequestException('Transação referenciada não encontrada.');
+                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' não foi encontrada.`);
                 }
 
                 if (refTx.kind !== 'BET') {
-                    throw new BadRequestException('REFUND só pode ser aplicado a transações do tipo BET.');
+                    throw new BadRequestException(`Operação de REFUND inválida. Transação de referência é do tipo '${refTx.kind}', mas deve ser 'BET'.`);
                 }
 
                 newBalance = currentBalance.add(operationMoney);
@@ -109,12 +110,12 @@ export class WagerService {
                 });
 
                 if (!refTx) {
-                    throw new BadRequestException('Transação referenciada não encontrada.');
+                    throw new BadRequestException(`Transação de referência '${dto.referenceExternalTransactionId}' não foi encontrada.`);
                 }
 
-                const allowedReferencedKinds = ['BET', 'WIN', 'REFUND'];
-                if (!allowedReferencedKinds.includes(refTx.kind)) {
-                    throw new BadRequestException('ROLLBACK só pode ser aplicado a transações do tipo BET, WIN ou REFUND.');
+                const allowedKinds = ['BET', 'WIN', 'REFUND'];
+                if (!allowedKinds.includes(refTx.kind)) {
+                    throw new BadRequestException(`Operação de ROLLBACK inválida. Transação de referência do tipo '${refTx.kind}' não é permitida. Permita apenas: BET, WIN ou REFUND.`);
                 }
 
                 if (refTx.kind === 'BET') {
@@ -129,7 +130,9 @@ export class WagerService {
                 }
             }
 
-            if (direction !== null) {
+            const isBalanceAffected = affectsBalance(dto.kind);
+
+            if (isBalanceAffected && direction !== null) {
                 wallet.balanceAmount = newBalance.toJSON().amount;
             }
 
@@ -153,7 +156,7 @@ export class WagerService {
             });
             await em.persist(wagerTx);
 
-            if (direction !== null) {
+            if (isBalanceAffected && direction !== null) {
                 const ledgerEntry = em.create(WalletLedgerEntryEntity, {
                     walletId: wallet.id,
                     transactionId: wagerTxId,
@@ -194,7 +197,7 @@ export class WagerService {
             return {
                 transactionId: wagerTxId,
                 status: 'PROCESSED',
-                balanceAmount: newBalance.toJSON().amount,
+                balanceAmount: wallet.balanceAmount,
                 currency: dto.currency,
             };
         });
