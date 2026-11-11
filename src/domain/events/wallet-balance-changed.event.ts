@@ -1,9 +1,9 @@
-import { IntegrationEvent, IntegrationEventProps } from './integration-event';
+import { IntegrationEvent } from './integration-event';
 
 export interface WalletBalanceChangedData {
     walletId: string;
     transactionId: string;
-    direction: 'DEBIT' | 'CREDIT';
+    direction: 'CREDIT' | 'DEBIT';
     money: { amount: string; currency: string };
     balanceBefore: { amount: string; currency: string };
     balanceAfter: { amount: string; currency: string };
@@ -11,10 +11,16 @@ export interface WalletBalanceChangedData {
 }
 
 export class WalletBalanceChangedEvent extends IntegrationEvent<WalletBalanceChangedData> {
-    readonly eventType = 'WalletBalanceChanged';
-    readonly version = 1;
-
-    constructor(props: IntegrationEventProps<WalletBalanceChangedData>) {
-        super(props);
+    constructor(props: {
+        aggregateId: string;
+        correlationId: string;
+        causationId?: string;
+        version?: number;
+        data: WalletBalanceChangedData;
+    }) {
+        super({
+            ...props,
+            eventType: 'WalletBalanceChanged',
+        });
     }
 }

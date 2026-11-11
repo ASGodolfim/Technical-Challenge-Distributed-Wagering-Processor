@@ -7,6 +7,8 @@ import { OutboxMessageEntity } from '../../infrastructure/persistence/entities/o
 import { Money } from '../../domain/money';
 import { WalletBalanceChangedEvent } from '../../domain/events/wallet-balance-changed.event';
 import { WagerTransactionPendingReferenceEvent } from '../../domain/events/wager-pending-reference.event';
+import { WagerTransactionProcessedEvent } from '../../domain/events/wager-transaction-processed.event';
+import { WagerTransactionRejectedEvent } from '../../domain/events/wager-transaction-rejected.event';
 import { ProcessWagerRequestDto, ProcessWagerResponseDto } from '../dtos/wager.dto';
 import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
@@ -147,6 +149,8 @@ export class WagerService {
             }
 
             const wagerTxId = crypto.randomUUID();
+            const correlationId = dto.correlationId ?? wagerTxId;
+
             const wagerTx = em.create(WagerTransactionEntity, {
                 id: wagerTxId,
                 providerId: dto.providerId,
@@ -166,6 +170,34 @@ export class WagerService {
             });
             await em.persist(wagerTx);
 
+            const processedEvent = new WagerTransactionProcessedEvent({
+                aggregateId: wagerTxId,
+                correlationId,
+                causationId: wagerTxId,
+                data: {
+                    transactionId: wagerTxId,
+                    providerId: dto.providerId,
+                    externalTransactionId: dto.externalTransactionId,
+                    walletId: wallet.id,
+                    playerId: dto.playerId,
+                    roundId: dto.roundId,
+                    gameId: dto.gameId,
+                    kind: dto.kind,
+                    money: operationMoney.toJSON(),
+                    referenceExternalTransactionId: dto.referenceExternalTransactionId,
+                },
+            });
+
+            await em.persist(
+                em.create(OutboxMessageEntity, {
+                    aggregateId: wagerTxId,
+                    eventType: processedEvent.eventType,
+                    payload: processedEvent.toJSON(),
+                    occurredAt: processedEvent.occurredAt,
+                    attempts: 0,
+                }),
+            );
+
             if (isBalanceAffected && direction !== null) {
                 const ledgerEntry = em.create(WalletLedgerEntryEntity, {
                     walletId: wallet.id,
@@ -180,7 +212,8 @@ export class WagerService {
 
                 const balanceEvent = new WalletBalanceChangedEvent({
                     aggregateId: wallet.id,
-                    correlationId: dto.correlationId ?? wagerTxId,
+                    correlationId,
+                    causationId: processedEvent.eventId,
                     data: {
                         walletId: wallet.id,
                         transactionId: wagerTxId,
@@ -192,14 +225,15 @@ export class WagerService {
                     },
                 });
 
-                const outboxMsg = em.create(OutboxMessageEntity, {
-                    aggregateId: wallet.id,
-                    eventType: balanceEvent.eventType,
-                    payload: balanceEvent.toJSON(),
-                    occurredAt: balanceEvent.occurredAt,
-                    attempts: 0,
-                });
-                await em.persist(outboxMsg);
+                await em.persist(
+                    em.create(OutboxMessageEntity, {
+                        aggregateId: wallet.id,
+                        eventType: balanceEvent.eventType,
+                        payload: balanceEvent.toJSON(),
+                        occurredAt: balanceEvent.occurredAt,
+                        attempts: 0,
+                    }),
+                );
             }
 
             await em.flush();
@@ -216,18 +250,6 @@ export class WagerService {
         });
     }
 
-    async getTransactionById(transactionId: string) {
-        const tx = await this.em.findOne(WagerTransactionEntity, { id: transactionId });
-        if (!tx) throw new BadRequestException('Transação não encontrada.');
-        return tx;
-    }
-
-    async getTransactionByExternalId(providerId: string, externalTransactionId: string) {
-        const tx = await this.em.findOne(WagerTransactionEntity, { providerId, externalTransactionId });
-        if (!tx) throw new BadRequestException('Transação externa não encontrada.');
-        return tx;
-    }
-
     private async handlePendingReference(
         em: EntityManager,
         dto: ProcessWagerRequestDto,
@@ -237,6 +259,8 @@ export class WagerService {
         payloadHash: string,
     ): Promise<ProcessWagerResponseDto> {
         const txId = crypto.randomUUID();
+        const correlationId = dto.correlationId ?? txId;
+
         const pendingTx = em.create(WagerTransactionEntity, {
             id: txId,
             providerId: dto.providerId,
@@ -252,30 +276,38 @@ export class WagerService {
             currency: dto.money.currency,
             referenceExternalTransactionId: dto.referenceExternalTransactionId,
             status: 'PENDING_REFERENCE',
+            retryCount: 0,
+            nextRetryAt: new Date(Date.now() + 2000), // primeira tentativa após 2s
             processedAt: new Date(),
         });
         await em.persist(pendingTx);
 
-        const pendingEvent = new WagerTransactionPendingReferenceEvent(wallet.id, dto.correlationId ?? txId, {
-            transactionId: txId,
-            providerId: dto.providerId,
-            externalTransactionId: dto.externalTransactionId,
-            referenceExternalTransactionId: dto.referenceExternalTransactionId!,
-            walletId: wallet.id,
-            playerId: dto.playerId,
-            kind: dto.kind,
-            amount: dto.money.amount,
-            currency: dto.money.currency,
+        const pendingEvent = new WagerTransactionPendingReferenceEvent({
+            aggregateId: txId,
+            correlationId,
+            causationId: txId,
+            data: {
+                transactionId: txId,
+                providerId: dto.providerId,
+                externalTransactionId: dto.externalTransactionId,
+                referenceExternalTransactionId: dto.referenceExternalTransactionId!,
+                walletId: wallet.id,
+                playerId: dto.playerId,
+                kind: dto.kind,
+                amount: dto.money.amount,
+                currency: dto.money.currency,
+            },
         });
 
-        const outboxMsg = em.create(OutboxMessageEntity, {
-            aggregateId: wallet.id,
-            eventType: pendingEvent.eventType,
-            payload: pendingEvent.toJSON(),
-            occurredAt: pendingEvent.occurredAt,
-            attempts: 0,
-        });
-        await em.persist(outboxMsg);
+        await em.persist(
+            em.create(OutboxMessageEntity, {
+                aggregateId: txId,
+                eventType: pendingEvent.eventType,
+                payload: pendingEvent.toJSON(),
+                occurredAt: pendingEvent.occurredAt,
+                attempts: 0,
+            }),
+        );
         await em.flush();
 
         return {
@@ -299,6 +331,9 @@ export class WagerService {
         failureCode: string,
     ): Promise<ProcessWagerResponseDto> {
         const rejectedTxId = crypto.randomUUID();
+        const correlationId = dto.correlationId ?? rejectedTxId;
+        const operationMoney = Money.from({ amount: dto.money.amount, currency: dto.money.currency });
+
         const rejectedTx = em.create(WagerTransactionEntity, {
             id: rejectedTxId,
             providerId: dto.providerId,
@@ -310,14 +345,45 @@ export class WagerService {
             roundId: dto.roundId,
             gameId: dto.gameId,
             kind: dto.kind,
-            moneyAmount: Money.from({ amount: dto.money.amount, currency: dto.money.currency }).toJSON().amount,
+            moneyAmount: operationMoney.toJSON().amount,
             currency: dto.money.currency,
             referenceExternalTransactionId: dto.referenceExternalTransactionId,
             status: 'REJECTED',
             failureCode,
             processedAt: new Date(),
         });
-        await em.persist(rejectedTx).flush();
+        await em.persist(rejectedTx);
+
+        const rejectedEvent = new WagerTransactionRejectedEvent({
+            aggregateId: rejectedTxId,
+            correlationId,
+            causationId: rejectedTxId,
+            data: {
+                transactionId: rejectedTxId,
+                providerId: dto.providerId,
+                externalTransactionId: dto.externalTransactionId,
+                walletId: wallet.id,
+                playerId: dto.playerId,
+                roundId: dto.roundId,
+                gameId: dto.gameId,
+                kind: dto.kind,
+                money: operationMoney.toJSON(),
+                failureCode,
+                referenceExternalTransactionId: dto.referenceExternalTransactionId,
+            },
+        });
+
+        await em.persist(
+            em.create(OutboxMessageEntity, {
+                aggregateId: rejectedTxId,
+                eventType: rejectedEvent.eventType,
+                payload: rejectedEvent.toJSON(),
+                occurredAt: rejectedEvent.occurredAt,
+                attempts: 0,
+            }),
+        );
+
+        await em.flush();
 
         return {
             transactionId: rejectedTx.id,
@@ -329,5 +395,17 @@ export class WagerService {
             idempotentReplay: false,
             failureCode,
         };
+    }
+
+    async getTransactionById(transactionId: string) {
+        const tx = await this.em.findOne(WagerTransactionEntity, { id: transactionId });
+        if (!tx) throw new BadRequestException('Transação não encontrada.');
+        return tx;
+    }
+
+    async getTransactionByExternalId(providerId: string, externalTransactionId: string) {
+        const tx = await this.em.findOne(WagerTransactionEntity, { providerId, externalTransactionId });
+        if (!tx) throw new BadRequestException('Transação externa não encontrada.');
+        return tx;
     }
 }

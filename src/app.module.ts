@@ -9,6 +9,7 @@ import { WagerTransactionEntity } from './infrastructure/persistence/entities/wa
 import { WalletLedgerEntryEntity } from './infrastructure/persistence/entities/wallet-ledger-entry.entity';
 import { OutboxMessageEntity } from './infrastructure/persistence/entities/outbox-message.entity';
 import { InboxMessageEntity } from './infrastructure/persistence/entities/inbox-message.entity';
+import { PendingReferenceWorkerService } from './infrastructure/messaging/pending-reference-worker.service';
 
 // Serviços
 import { WagerService } from './application/services/wager.service';
@@ -31,6 +32,11 @@ import { HealthController } from './infrastructure/http/health.controller';
       WalletLedgerEntryEntity,
       OutboxMessageEntity,
       InboxMessageEntity,
+      WagerService,
+      WalletService,
+      OutboxRelayService,
+      SqsConsumerService,
+      PendingReferenceWorkerService,
     ]),
   ],
   controllers: [WageringController, WalletsController, HealthController],

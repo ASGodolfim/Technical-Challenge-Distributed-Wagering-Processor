@@ -2,86 +2,98 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { ReceiveMessageCommand, DeleteMessageCommand } from '@aws-sdk/client-sqs';
+import { sqsClient } from './sqs.client';
 import { InboxMessageEntity } from '../persistence/entities/inbox-message.entity';
-import { sqsClient, QUEUE_URL } from './sqs.client';
-import * as crypto from 'crypto';
 
 @Injectable()
 export class SqsConsumerService {
     private readonly logger = new Logger(SqsConsumerService.name);
-    private isConsuming = false;
+    private readonly consumerName = 'wagering-events-consumer';
+    private readonly queueUrl =
+        process.env.SQS_QUEUE_URL || 'http://localhost:9324/000000000000/wallet-events-queue';
 
     constructor(private readonly em: EntityManager) { }
 
     @Cron(CronExpression.EVERY_5_SECONDS)
-    async consumeMessages(): Promise<void> {
-        if (this.isConsuming) return;
-        this.isConsuming = true;
+    async pollMessages() {
+        try {
+            const response = await sqsClient.send(
+                new ReceiveMessageCommand({
+                    QueueUrl: this.queueUrl,
+                    MaxNumberOfMessages: 10,
+                    WaitTimeSeconds: 1,
+                }),
+            );
+
+            if (!response.Messages || response.Messages.length === 0) return;
+
+            for (const msg of response.Messages) {
+                if (!msg.MessageId || !msg.Body || !msg.ReceiptHandle) continue;
+                await this.consumeWithInboxDeduplication(msg.MessageId, msg.Body, msg.ReceiptHandle);
+            }
+        } catch (error) {
+            this.logger.error('Erro ao ler mensagens do SQS', error);
+        }
+    }
+
+    async consumeWithInboxDeduplication(
+        messageId: string,
+        rawBody: string,
+        receiptHandle: string,
+    ): Promise<boolean> {
+        const fork = this.em.fork();
+        const parsed = JSON.parse(rawBody);
+        const eventType = parsed.eventType ?? 'UnknownEvent';
 
         try {
-            const receiveCommand = new ReceiveMessageCommand({
-                QueueUrl: QUEUE_URL,
-                MaxNumberOfMessages: 10,
-                WaitTimeSeconds: 2,
-                MessageAttributeNames: ['All'],
+            const processed = await fork.transactional(async (em) => {
+                // Deduplicação transacional por chave composta (consumerName, messageId)
+                const alreadyProcessed = await em.findOne(InboxMessageEntity, {
+                    consumerName: this.consumerName,
+                    messageId,
+                });
+
+                if (alreadyProcessed) {
+                    this.logger.debug(`Mensagem duplicada ignorada via Inbox: (${this.consumerName}, ${messageId})`);
+                    return false;
+                }
+
+                const inboxRecord = em.create(InboxMessageEntity, {
+                    consumerName: this.consumerName,
+                    messageId,
+                    eventType,
+                    processedAt: new Date(),
+                });
+                await em.persist(inboxRecord);
+
+                // Processamento idempotente do evento recebido
+                this.logger.log(`Evento [${eventType}] consumido (eventId=${parsed.eventId}, correlationId=${parsed.correlationId})`);
+
+                await em.flush();
+                return true;
             });
 
-            const response = await sqsClient.send(receiveCommand);
+            await sqsClient.send(
+                new DeleteMessageCommand({
+                    QueueUrl: this.queueUrl,
+                    ReceiptHandle: receiptHandle,
+                }),
+            );
 
-            if (!response.Messages || response.Messages.length === 0) {
-                this.isConsuming = false;
-                return;
+            return processed;
+        } catch (err: any) {
+            // Trata corrida concorrente onde a restrição UNIQUE (23505) bloqueou inserção duplicada
+            if (err?.code === '23505') {
+                this.logger.debug(`Concorrência bloqueada pela constraint UNIQUE do Inbox: ${messageId}`);
+                await sqsClient.send(
+                    new DeleteMessageCommand({
+                        QueueUrl: this.queueUrl,
+                        ReceiptHandle: receiptHandle,
+                    }),
+                );
+                return false;
             }
-
-            for (const message of response.Messages) {
-                if (!message.MessageId || !message.Body) continue;
-
-                const fork = this.em.fork();
-                const consumerName = 'WalletBalanceChangedConsumer';
-
-                try {
-                    await fork.transactional(async (em) => {
-                        const existingInbox = await em.findOne(InboxMessageEntity, {
-                            consumerName,
-                            messageId: message.MessageId,
-                        });
-
-                        if (existingInbox) {
-                            this.logger.warn(`[Inbox] Mensagem ${message.MessageId} já processada anteriormente. Descartando.`);
-                            return;
-                        }
-
-                        const payloadHash = crypto
-                            .createHash('sha256')
-                            .update(message.Body)
-                            .digest('hex');
-
-                        const inboxRecord = em.create(InboxMessageEntity, {
-                            messageId: message.MessageId,
-                            consumerName,
-                            payloadHash,
-                            receivedAt: new Date(),
-                            processedAt: new Date(),
-                        });
-                        await em.persist(inboxRecord);
-
-                        const eventPayload = JSON.parse(message.Body);
-                        this.logger.log(`[Inbox Consumer] Evento ${eventPayload.eventType} processado com sucesso.`);
-                    });
-
-                    await sqsClient.send(
-                        new DeleteMessageCommand({
-                            QueueUrl: QUEUE_URL,
-                            ReceiptHandle: message.ReceiptHandle,
-                        }),
-                    );
-                } catch (error: any) {
-                    this.logger.error(`[Inbox Consumer] Erro ao processar mensagem ${message.MessageId}: ${error.message}`);
-                }
-            }
-        } catch (error: any) {
-        } finally {
-            this.isConsuming = false;
+            throw err;
         }
     }
 }

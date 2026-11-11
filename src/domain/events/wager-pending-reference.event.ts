@@ -1,3 +1,5 @@
+import { IntegrationEvent } from './integration-event';
+
 export interface WagerPendingReferencePayload {
     transactionId: string;
     providerId: string;
@@ -10,25 +12,17 @@ export interface WagerPendingReferencePayload {
     currency: string;
 }
 
-export class WagerTransactionPendingReferenceEvent {
-    public readonly eventType = 'WagerTransactionPendingReference';
-    public readonly occurredAt: Date;
-
-    constructor(
-        public readonly aggregateId: string,
-        public readonly correlationId: string,
-        public readonly data: WagerPendingReferencePayload,
-    ) {
-        this.occurredAt = new Date();
-    }
-
-    toJSON() {
-        return {
-            eventType: this.eventType,
-            occurredAt: this.occurredAt.toISOString(),
-            aggregateId: this.aggregateId,
-            correlationId: this.correlationId,
-            data: this.data,
-        };
+export class WagerTransactionPendingReferenceEvent extends IntegrationEvent<WagerPendingReferencePayload> {
+    constructor(props: {
+        aggregateId: string;
+        correlationId: string;
+        causationId?: string;
+        version?: number;
+        data: WagerPendingReferencePayload;
+    }) {
+        super({
+            ...props,
+            eventType: 'WagerTransactionPendingReference',
+        });
     }
 }

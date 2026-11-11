@@ -57,4 +57,10 @@ export class WagerTransactionEntity {
 
     @Property({ type: 'timestamptz', fieldName: 'created_at', onCreate: () => new Date() })
     createdAt!: Date;
+
+    @Property({ type: 'integer', default: 0 })
+    retryCount: number = 0;
+
+    @Property({ type: 'Date', nullable: true })
+    nextRetryAt?: Date;
 }
