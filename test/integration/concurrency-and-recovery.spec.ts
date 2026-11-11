@@ -6,9 +6,11 @@ import {
     TestAppInstance,
 } from './test-helpers';
 import { WalletLedgerEntryEntity } from '../../src/infrastructure/persistence/entities/wallet-ledger-entry.entity';
+import { WagerTransactionEntity } from '../../src/infrastructure/persistence/entities/wager-transaction.entity';
 import { OutboxMessageEntity } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
 import { InboxMessageEntity } from '../../src/infrastructure/persistence/entities/inbox-message.entity';
 import { SqsConsumerService } from '../../src/infrastructure/messaging/sqs-consumer.service';
+import { PendingReferenceWorkerService } from '../../src/infrastructure/messaging/pending-reference-worker.service';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { sqsClient } from '../../src/infrastructure/messaging/sqs.client';
 import {
@@ -301,6 +303,283 @@ describe('Concorrência Real, Multi-Instância & Crash Recovery', () => {
             sqsMsg!.ReceiptHandle!,
         );
         expect(reprocessed).toBe(false);
+
+        await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
+    });
+
+    test('Seção 13.1a (Referência Fora de Ordem - Resolvida): ROLLBACK antes da BET fica PENDING_REFERENCE e processa após BET chegar', async () => {
+        const primary = instances[0];
+        const { walletId, playerId } = await createTestWallet(primary.baseUrl, '100.00');
+        const roundId = crypto.randomUUID();
+        const betExtId = `ext-bet-ooo-${crypto.randomUUID()}`;
+        const rollbackExtId = `ext-rb-ooo-${crypto.randomUUID()}`;
+
+        const rollbackRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-rb-ooo-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: rollbackExtId,
+                referenceExternalTransactionId: betExtId,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'gates-of-olympus',
+                kind: 'ROLLBACK',
+                money: { amount: '30.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(rollbackRes.status).toBe('PENDING_REFERENCE');
+        expect(rollbackRes.balance.amount).toBe('100.00');
+
+        const betRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-bet-ooo-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: betExtId,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'gates-of-olympus',
+                kind: 'BET',
+                money: { amount: '30.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(betRes.status).toBe('PROCESSED');
+        expect(betRes.balance.amount).toBe('70.00');
+
+        const worker = primary.app.get(PendingReferenceWorkerService);
+        await worker.reprocessSingle(rollbackRes.transactionId);
+
+        const updatedRollback = await fetch(
+            `${primary.baseUrl}/wagering/transactions/${rollbackRes.transactionId}`,
+        ).then((r) => r.json());
+        expect(updatedRollback.status).toBe('PROCESSED');
+
+        const walletRes = await fetch(`${primary.baseUrl}/wallets/${walletId}`).then((r) => r.json());
+        expect(walletRes.balance.amount).toBe('100.00');
+
+        await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
+    });
+
+    test('Seção 13.1b (Referência Fora de Ordem - Expirada): Rejeita com REFERENCE_TRANSACTION_NOT_FOUND após limite de tentativas', async () => {
+        const primary = instances[0];
+        const { walletId, playerId } = await createTestWallet(primary.baseUrl, '100.00');
+
+        const refundRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-ref-exp-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: `ext-ref-exp-${crypto.randomUUID()}`,
+                referenceExternalTransactionId: `ext-bet-missing-${crypto.randomUUID()}`,
+                playerId,
+                walletId,
+                roundId: crypto.randomUUID(),
+                gameId: 'gates-of-olympus',
+                kind: 'REFUND',
+                money: { amount: '25.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(refundRes.status).toBe('PENDING_REFERENCE');
+
+        const worker = primary.app.get(PendingReferenceWorkerService);
+        for (let attempt = 0; attempt < 5; attempt++) {
+            await worker.reprocessSingle(refundRes.transactionId);
+        }
+
+        const fork = primary.em.fork();
+        const expiredTx = await fork.findOneOrFail(WagerTransactionEntity, {
+            id: refundRes.transactionId,
+        });
+        expect(expiredTx.status).toBe('REJECTED');
+        expect(expiredTx.failureCode).toBe('REFERENCE_TRANSACTION_NOT_FOUND');
+
+        const rejectedOutbox = await fork.findOne(OutboxMessageEntity, {
+            aggregateId: refundRes.transactionId,
+            eventType: 'WagerTransactionRejected',
+        });
+        expect(rejectedOutbox).not.toBeNull();
+
+        await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
+    });
+
+    test('Seção 13.2 (Conflito de Idempotência): Mesma Idempotency-Key com payload diferente retorna HTTP 409 sem replay', async () => {
+        const primary = instances[0];
+        const { walletId, playerId } = await createTestWallet(primary.baseUrl, '100.00');
+        const sharedIdempotencyKey = `idem-conflict-${crypto.randomUUID()}`;
+        const roundId = crypto.randomUUID();
+
+        const firstRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': sharedIdempotencyKey,
+            },
+            body: JSON.stringify({
+                providerId: 'evolution',
+                externalTransactionId: `ext-conf-1-${crypto.randomUUID()}`,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'lightning-roulette',
+                kind: 'BET',
+                money: { amount: '20.00', currency: 'BRL' },
+            }),
+        });
+        expect(firstRes.status).toBe(201);
+        const firstBody = await firstRes.json();
+        expect(firstBody.status).toBe('PROCESSED');
+        expect(firstBody.balance.amount).toBe('80.00');
+
+        const conflictRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': sharedIdempotencyKey,
+            },
+            body: JSON.stringify({
+                providerId: 'evolution',
+                externalTransactionId: `ext-conf-1-${crypto.randomUUID()}`,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'lightning-roulette',
+                kind: 'BET',
+                money: { amount: '50.00', currency: 'BRL' },
+            }),
+        });
+
+        expect(conflictRes.status).toBe(409);
+
+        const walletRes = await fetch(`${primary.baseUrl}/wallets/${walletId}`).then((r) => r.json());
+        expect(walletRes.balance.amount).toBe('80.00');
+
+        await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
+    });
+
+    test('Seção 13.3 (Regra do LOSS): LOSS retorna PROCESSED, não altera saldo e não cria entrada no WalletLedgerEntry', async () => {
+        const primary = instances[0];
+        const { walletId, playerId } = await createTestWallet(primary.baseUrl, '100.00');
+
+        const forkBefore = primary.em.fork();
+        const entriesBefore = await forkBefore.find(WalletLedgerEntryEntity, { walletId });
+        expect(entriesBefore.length).toBe(1); // Apenas o OPENING
+
+        const lossRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-loss-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'hacksaw',
+                externalTransactionId: `ext-loss-${crypto.randomUUID()}`,
+                playerId,
+                walletId,
+                roundId: crypto.randomUUID(),
+                gameId: 'chaos-crew',
+                kind: 'LOSS',
+                money: { amount: '25.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(lossRes.status).toBe('PROCESSED');
+        expect(lossRes.balance.amount).toBe('100.00');
+        expect(lossRes.idempotentReplay).toBe(false);
+
+        const forkAfter = primary.em.fork();
+        const entriesAfter = await forkAfter.find(WalletLedgerEntryEntity, { walletId });
+        expect(entriesAfter.length).toBe(1);
+
+        await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
+    });
+
+    test('Seção 13.4 (Saldo Insuficiente em ROLLBACK): Estorno de WIN sem saldo rejeita com INSUFFICIENT_FUNDS_FOR_ROLLBACK', async () => {
+        const primary = instances[0];
+        const { walletId, playerId } = await createTestWallet(primary.baseUrl, '50.00');
+        const roundId = crypto.randomUUID();
+        const winExtId = `ext-win-${crypto.randomUUID()}`;
+
+        const winRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-win-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: winExtId,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'sweet-bonanza',
+                kind: 'WIN',
+                money: { amount: '100.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(winRes.status).toBe('PROCESSED');
+        expect(winRes.balance.amount).toBe('150.00');
+
+        const betRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-bet-spend-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: `ext-bet-spend-${crypto.randomUUID()}`,
+                playerId,
+                walletId,
+                roundId: crypto.randomUUID(),
+                gameId: 'sweet-bonanza',
+                kind: 'BET',
+                money: { amount: '120.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(betRes.status).toBe('PROCESSED');
+        expect(betRes.balance.amount).toBe('30.00');
+
+        // 3. Provedor solicita ROLLBACK do WIN de R$ 100,00 (saldo atual é apenas R$ 30,00)
+        const rollbackWinRes = await fetch(`${primary.baseUrl}/wagering/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': `idem-rb-win-${crypto.randomUUID()}`,
+            },
+            body: JSON.stringify({
+                providerId: 'pragmatic',
+                externalTransactionId: `ext-rb-win-${crypto.randomUUID()}`,
+                referenceExternalTransactionId: winExtId,
+                playerId,
+                walletId,
+                roundId,
+                gameId: 'sweet-bonanza',
+                kind: 'ROLLBACK',
+                money: { amount: '100.00', currency: 'BRL' },
+            }),
+        }).then((r) => r.json());
+
+        expect(rollbackWinRes.status).toBe('REJECTED');
+        expect(rollbackWinRes.failureCode).toBe('INSUFFICIENT_FUNDS_FOR_ROLLBACK');
+        expect(rollbackWinRes.failureCode).not.toBe('INSUFFICIENT_FUNDS');
+        expect(rollbackWinRes.balance.amount).toBe('30.00');
 
         await assertWalletLedgerInvariant(primary.em, walletId, primary.baseUrl);
     });
