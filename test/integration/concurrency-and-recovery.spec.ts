@@ -9,8 +9,13 @@ import { WalletLedgerEntryEntity } from '../../src/infrastructure/persistence/en
 import { OutboxMessageEntity } from '../../src/infrastructure/persistence/entities/outbox-message.entity';
 import { InboxMessageEntity } from '../../src/infrastructure/persistence/entities/inbox-message.entity';
 import { SqsConsumerService } from '../../src/infrastructure/messaging/sqs-consumer.service';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import { sqsClient } from '../../src/infrastructure/messaging/sqs.client';
-import { SendMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs';
+import {
+    SendMessageCommand,
+    ReceiveMessageCommand,
+    DeleteMessageCommand,
+} from '@aws-sdk/client-sqs';
 
 describe('Concorrência Real, Multi-Instância & Crash Recovery', () => {
     let instances: TestAppInstance[] = [];
@@ -22,6 +27,11 @@ describe('Concorrência Real, Multi-Instância & Crash Recovery', () => {
         const app2 = await createAppInstance();
         const app3 = await createAppInstance();
         instances = [app1, app2, app3];
+
+        for (const inst of instances) {
+            const scheduler = inst.app.get(SchedulerRegistry);
+            scheduler.getCronJobs().forEach((job) => job.stop());
+        }
     });
 
     afterAll(async () => {
@@ -226,6 +236,20 @@ describe('Concorrência Real, Multi-Instância & Crash Recovery', () => {
         expect(outboxRecords.length).toBeGreaterThanOrEqual(1);
 
         (sqsClient as any).send = originalSend;
+
+        let residual;
+        do {
+            residual = await sqsClient.send(
+                new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 10, WaitTimeSeconds: 0 }),
+            );
+            for (const msg of residual.Messages ?? []) {
+                if (msg.ReceiptHandle) {
+                    await sqsClient.send(
+                        new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: msg.ReceiptHandle }),
+                    );
+                }
+            }
+        } while (residual.Messages && residual.Messages.length > 0);
 
         const eventPayload = JSON.stringify(outboxRecords[0].payload);
         await sqsClient.send(

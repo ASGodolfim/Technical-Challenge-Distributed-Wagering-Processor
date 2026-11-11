@@ -2,7 +2,9 @@ import { Controller, Get, HttpStatus, HttpCode } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { sqsClient } from '../messaging/sqs.client';
 import { ListQueuesCommand } from '@aws-sdk/client-sqs';
+import { Public } from './decorators/public.decorator';
 
+@Public()
 @Controller('health')
 export class HealthController {
     constructor(private readonly em: EntityManager) { }

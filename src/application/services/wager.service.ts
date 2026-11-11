@@ -1,5 +1,6 @@
-import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
+import { setLogContext, getLogContext } from '../../infrastructure/observability/request-context';
 import { WalletEntity } from '../../infrastructure/persistence/entities/wallet.entity';
 import { WagerTransactionEntity } from '../../infrastructure/persistence/entities/wager-transaction.entity';
 import { WalletLedgerEntryEntity } from '../../infrastructure/persistence/entities/wallet-ledger-entry.entity';
@@ -13,11 +14,20 @@ import { ProcessWagerRequestDto, ProcessWagerResponseDto } from '../dtos/wager.d
 import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
 
+
 @Injectable()
 export class WagerService {
+    private readonly logger = new Logger(WagerService.name);
+
     constructor(private readonly em: EntityManager) { }
 
     async processWager(dto: ProcessWagerRequestDto, idempotencyKey: string): Promise<ProcessWagerResponseDto> {
+        setLogContext({
+            walletId: dto.walletId,
+            providerId: dto.providerId,
+            ...(dto.correlationId ? { correlationId: dto.correlationId } : {}),
+        });
+
         if (!idempotencyKey) {
             throw new BadRequestException('O header Idempotency-Key é obrigatório.');
         }
@@ -42,6 +52,13 @@ export class WagerService {
                 }
 
                 const wallet = await em.findOne(WalletEntity, { id: existingTx.walletId });
+                setLogContext({ transactionId: existingTx.id });
+                this.logger.log({
+                    message: 'Idempotent replay returned',
+                    status: existingTx.status,
+                    kind: dto.kind,
+                });
+
                 return {
                     transactionId: existingTx.id,
                     status: existingTx.status as any,
@@ -52,6 +69,7 @@ export class WagerService {
                     idempotentReplay: true,
                     failureCode: existingTx.failureCode,
                 };
+
             }
 
             const wallet = await em.findOne(
@@ -173,7 +191,13 @@ export class WagerService {
             }
 
             const wagerTxId = crypto.randomUUID();
-            const correlationId = dto.correlationId ?? wagerTxId;
+            const correlationId = dto.correlationId ?? getLogContext().correlationId ?? wagerTxId;
+            setLogContext({ correlationId, transactionId: wagerTxId });
+            this.logger.log({
+                message: 'Wager transaction processed',
+                kind: dto.kind,
+                status: 'PROCESSED',
+            });
 
             const wagerTx = em.create(WagerTransactionEntity, {
                 id: wagerTxId,
@@ -283,7 +307,13 @@ export class WagerService {
         payloadHash: string,
     ): Promise<ProcessWagerResponseDto> {
         const txId = crypto.randomUUID();
-        const correlationId = dto.correlationId ?? txId;
+        const correlationId = dto.correlationId ?? getLogContext().correlationId ?? txId;
+        setLogContext({ correlationId, transactionId: txId });
+        this.logger.warn({
+            message: 'Wager transaction marked as PENDING_REFERENCE',
+            kind: dto.kind,
+            status: 'PENDING_REFERENCE',
+        });
 
         const pendingTx = em.create(WagerTransactionEntity, {
             id: txId,
@@ -355,7 +385,14 @@ export class WagerService {
         failureCode: string,
     ): Promise<ProcessWagerResponseDto> {
         const rejectedTxId = crypto.randomUUID();
-        const correlationId = dto.correlationId ?? rejectedTxId;
+        const correlationId = dto.correlationId ?? getLogContext().correlationId ?? rejectedTxId;
+        setLogContext({ correlationId, transactionId: rejectedTxId });
+        this.logger.warn({
+            message: 'Wager transaction rejected',
+            kind: dto.kind,
+            status: 'REJECTED',
+            failureCode,
+        });
         const operationMoney = Money.from({ amount: dto.money.amount, currency: dto.money.currency });
 
         const rejectedTx = em.create(WagerTransactionEntity, {

@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { ScheduleModule } from '@nestjs/schedule';
 import mikroOrmConfig from './mikro-orm.config';
@@ -18,6 +19,9 @@ import { PendingReferenceWorkerService } from './infrastructure/messaging/pendin
 import { WageringController } from './infrastructure/http/wager.controller';
 import { WalletsController } from './infrastructure/http/wallets.controller';
 import { HealthController } from './infrastructure/http/health.controller';
+import { AuthGuard } from './infrastructure/http/guards/auth.guard';
+import { CorrelationMiddleware } from './infrastructure/observability/correlation.middleware';
+import { StructuredLogger } from './infrastructure/observability/structured-logger.service';
 
 @Module({
   imports: [
@@ -33,6 +37,11 @@ import { HealthController } from './infrastructure/http/health.controller';
   ],
   controllers: [WageringController, WalletsController, HealthController],
   providers: [
+    StructuredLogger,
+    {
+      provide: APP_GUARD,
+      useClass: AuthGuard,
+    },
     WagerService,
     WalletService,
     OutboxRelayService,
@@ -40,4 +49,8 @@ import { HealthController } from './infrastructure/http/health.controller';
     PendingReferenceWorkerService,
   ],
 })
-export class AppModule { }
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(CorrelationMiddleware).forRoutes('*');
+  }
+}
