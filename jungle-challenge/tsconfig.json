@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "moduleResolution": "bundler",
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,

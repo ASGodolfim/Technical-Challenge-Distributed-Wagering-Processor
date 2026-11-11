@@ -3,7 +3,7 @@ import mikroOrmConfig from '../../mikro-orm.config';
 import { WalletEntity } from '../persistence/entities/wallet.entity';
 
 async function seed() {
-    const orm = await MikroORM.init(mikroOrmConfig);
+    const orm = await MikroORM.init(mikroOrmConfig as any);
     const em = orm.em.fork();
 
     const testPlayerId = '11111111-1111-1111-1111-111111111111';

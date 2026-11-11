@@ -59,7 +59,9 @@ export class WagerService {
 
             if (dto.kind === 'BET') {
                 if (currentBalance.subtract(operationMoney).isNegative()) {
+                    const rejectedTxId = crypto.randomUUID();
                     const rejectedTx = em.create(WagerTransactionEntity, {
+                        id: rejectedTxId,
                         providerId: dto.providerId,
                         externalTransactionId: dto.externalTransactionId,
                         idempotencyKey: dto.idempotencyKey,
@@ -88,17 +90,16 @@ export class WagerService {
 
                 newBalance = currentBalance.subtract(operationMoney);
                 direction = 'DEBIT';
-            } else if (dto.kind === 'WIN') {
-                newBalance = currentBalance.add(operationMoney);
-                direction = 'CREDIT';
-            } else if (dto.kind === 'REFUND' || dto.kind === 'ROLLBACK') {
+            } else if (dto.kind === 'WIN' || dto.kind === 'REFUND' || dto.kind === 'ROLLBACK') {
                 newBalance = currentBalance.add(operationMoney);
                 direction = 'CREDIT';
             }
 
             wallet.balanceAmount = newBalance.toJSON().amount;
 
+            const wagerTxId = crypto.randomUUID();
             const wagerTx = em.create(WagerTransactionEntity, {
+                id: wagerTxId,
                 providerId: dto.providerId,
                 externalTransactionId: dto.externalTransactionId,
                 idempotencyKey: dto.idempotencyKey,
@@ -118,7 +119,7 @@ export class WagerService {
 
             const ledgerEntry = em.create(WalletLedgerEntryEntity, {
                 walletId: wallet.id,
-                transactionId: wagerTx.id,
+                transactionId: wagerTxId,
                 direction,
                 moneyAmount: operationMoney.toJSON().amount,
                 currency: dto.currency,
@@ -129,10 +130,10 @@ export class WagerService {
 
             const balanceEvent = new WalletBalanceChangedEvent({
                 aggregateId: wallet.id,
-                correlationId: dto.correlationId ?? wagerTx.id,
+                correlationId: dto.correlationId ?? wagerTxId,
                 data: {
                     walletId: wallet.id,
-                    transactionId: wagerTx.id,
+                    transactionId: wagerTxId,
                     direction,
                     money: operationMoney.toJSON(),
                     balanceBefore: currentBalance.toJSON(),
@@ -153,7 +154,7 @@ export class WagerService {
             await em.flush();
 
             return {
-                transactionId: wagerTx.id,
+                transactionId: wagerTxId,
                 status: 'PROCESSED',
                 balanceAmount: newBalance.toJSON().amount,
                 currency: dto.currency,
