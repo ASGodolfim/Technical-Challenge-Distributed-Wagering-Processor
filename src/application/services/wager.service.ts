@@ -14,6 +14,39 @@ import { ProcessWagerRequestDto, ProcessWagerResponseDto } from '../dtos/wager.d
 import { affectsBalance } from '../../domain/wager-transaction.kind';
 import * as crypto from 'crypto';
 
+function sortKeysRecursively(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(sortKeysRecursively);
+    }
+    if (value !== null && typeof value === 'object') {
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+            sorted[key] = sortKeysRecursively((value as Record<string, unknown>)[key]);
+        }
+        return sorted;
+    }
+    return value;
+}
+
+export function computeCanonicalPayloadHash(dto: ProcessWagerRequestDto): string {
+    const businessSubset = {
+        externalTransactionId: dto.externalTransactionId,
+        gameId: dto.gameId,
+        kind: dto.kind,
+        money: {
+            amount: dto.money?.amount,
+            currency: dto.money?.currency,
+        },
+        playerId: dto.playerId,
+        providerId: dto.providerId,
+        referenceExternalTransactionId: dto.referenceExternalTransactionId ?? null,
+        roundId: dto.roundId,
+        walletId: dto.walletId,
+    };
+
+    const canonicalJson = JSON.stringify(sortKeysRecursively(businessSubset));
+    return crypto.createHash('sha256').update(canonicalJson).digest('hex');
+}
 
 @Injectable()
 export class WagerService {
@@ -33,10 +66,7 @@ export class WagerService {
         }
 
         const operationMoney = Money.from({ amount: dto.money.amount, currency: dto.money.currency });
-        const payloadHash = crypto
-            .createHash('sha256')
-            .update(JSON.stringify({ ...dto, idempotencyKey }))
-            .digest('hex');
+        const payloadHash = computeCanonicalPayloadHash(dto);
 
         return await this.em.transactional(async (em) => {
             const existingTx = await em.findOne(WagerTransactionEntity, {
