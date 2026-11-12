@@ -23,6 +23,10 @@ import { AuthGuard } from './infrastructure/http/guards/auth.guard';
 import { CorrelationMiddleware } from './infrastructure/observability/correlation.middleware';
 import { StructuredLogger } from './infrastructure/observability/structured-logger.service';
 
+import { MiddlewareConsumer, Module, NestModule, OnModuleInit } from '@nestjs/common';
+import { CreateQueueCommand } from '@aws-sdk/client-sqs';
+import { sqsClient } from './infrastructure/messaging/sqs.client';
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -49,7 +53,15 @@ import { StructuredLogger } from './infrastructure/observability/structured-logg
     PendingReferenceWorkerService,
   ],
 })
-export class AppModule implements NestModule {
+
+export class AppModule implements NestModule, OnModuleInit {
+  async onModuleInit() {
+    const queueUrl =
+      process.env.SQS_QUEUE_URL || 'http://localhost:9324/000000000000/wallet-events-queue';
+    const queueName = queueUrl.split('/').pop() || 'wallet-events-queue';
+    await sqsClient.send(new CreateQueueCommand({ QueueName: queueName })).catch(() => { });
+  }
+
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(CorrelationMiddleware).forRoutes('*');
   }
