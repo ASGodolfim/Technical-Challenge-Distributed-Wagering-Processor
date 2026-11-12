@@ -57,7 +57,7 @@ test/
 # Instalar dependências
 bun install
 
-# Subir PostgreSQL e ElasticMQ (SQS local)
+# Subir PostgreSQL e LocalStack (SQS local)
 docker compose up -d
 
 # Aplicar migrações no banco de dados
@@ -93,11 +93,47 @@ bun run start:prod
 | `GET` | `/wagering/transactions/:transactionId` | Consulta transação pelo ID interno. |
 | `GET` | `/providers/:providerId/wagering/transactions/:externalTransactionId` | Consulta transação pelo identificador externo do provedor. |
 
-### Health Checks (Públicos / `@Public()`)
+### Health Checks & Métricas (Públicos / `@Public()`)
 | Método | Rota | Descrição |
 | :--- | :--- | :--- |
 | `GET` | `/health/live` | Verifica se o processo HTTP está ativo. |
 | `GET` | `/health/ready` | Valida conexão ativa com PostgreSQL e fila SQS. |
+| `GET` | `/metrics` | Expõe métricas operacionais em JSON (status, duplicatas, retries, lock, outbox lag e latência). |
+
+### Exemplos Rápidos de Requisição (`curl`)
+
+#### Criar Carteira (`POST /wallets`)
+```bash
+curl -X POST http://localhost:3000/wallets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "playerId": "11111111-1111-4111-8111-111111111111",
+    "initialBalance": {
+      "amount": "100.00",
+      "currency": "BRL"
+    }
+  }'
+```
+
+#### Processar Aposta (`POST /wagering/transactions`)
+```bash
+curl -X POST http://localhost:3000/wagering/transactions \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: idem-bet-0001" \
+  -d '{
+    "providerId": "pragmatic",
+    "externalTransactionId": "ext-tx-9001",
+    "playerId": "11111111-1111-4111-8111-111111111111",
+    "walletId": "<WALLET_ID_RETORNADO>",
+    "roundId": "22222222-2222-4222-8222-222222222222",
+    "gameId": "gates-of-olympus",
+    "kind": "BET",
+    "money": {
+      "amount": "25.00",
+      "currency": "BRL"
+    }
+  }'
+```
 
 ---
 
