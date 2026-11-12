@@ -1,4 +1,4 @@
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, OnModuleInit } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -23,7 +23,6 @@ import { AuthGuard } from './infrastructure/http/guards/auth.guard';
 import { CorrelationMiddleware } from './infrastructure/observability/correlation.middleware';
 import { StructuredLogger } from './infrastructure/observability/structured-logger.service';
 
-import { MiddlewareConsumer, Module, NestModule, OnModuleInit } from '@nestjs/common';
 import { CreateQueueCommand } from '@aws-sdk/client-sqs';
 import { sqsClient } from './infrastructure/messaging/sqs.client';
 
