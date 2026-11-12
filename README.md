@@ -23,7 +23,7 @@ Para detalhes aprofundados sobre decisões arquiteturais, locking, mapeamento OR
 - **Runtime & Testes:** Bun (`bun test`)
 - **Framework:** NestJS (TypeScript, arquitetura DDD em camadas)
 - **Persistência & ORM:** PostgreSQL + MikroORM (migrações e `LockMode.PESSIMISTIC_WRITE`)
-- **Mensageria:** AWS SQS (ElasticMQ via Docker Compose)
+- **Mensageria:** AWS SQS (LocalStack via Docker Compose)
 
 ---
 

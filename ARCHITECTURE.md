@@ -81,13 +81,45 @@ A API distingue **erros de contrato/sintaxe HTTP** (que retornam status HTTP `40
 
 ### Erros HTTP de Contrato e Validação (Pré-Persistência)
 - **`400 Bad Request`**: Ausência do header `Idempotency-Key`, carteira inexistente, moeda inválida ou tentativa de reverter transação em estado inválido.
-- **`409 Conflict`**: Reutilização de um `Idempotency-Key` existente com payload divergente (detecção via `SHA-256` do corpo da requisição).
+- **`409 Conflict`**: Reutilização de um `Idempotency-Key` existente com payload divergente.
+
+### Algoritmo de `payloadHash` Canônico (Detecção de Conflito)
+Para garantir determinismo independente da ordem das chaves enviadas pelo provedor ou de metadados de transporte, o `payloadHash` (`computeCanonicalPayloadHash` em `src/application/services/wager.service.ts`) é gerado em 4 etapas:
+1. **Extração do Subconjunto de Negócio:** Seleciona exclusivamente `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money` (`amount`, `currency`) e `referenceExternalTransactionId` (`null` quando ausente). Headers HTTP (`Idempotency-Key`, `X-Correlation-Id`) e metadados de transporte (`correlationId`) são explicitamente descartados.
+2. **Ordenação Recursiva:** Ordena alfabeticamente todas as chaves do objeto raiz e de objetos aninhados (`money`).
+3. **Serialização Compacta:** Converte para string via `JSON.stringify` sem espaços em branco.
+4. **Digest Criptográfico:** Calcula `SHA-256` em encoding hexadecimal (`64` caracteres) e compara com o valor persistido na transação original.
 
 ---
 
-## 6. Observabilidade & Logs Estruturados JSON
+## 6. Observabilidade: Logs Estruturados JSON & Métricas
 
-Implementado em `src/infrastructure/observability/`:
+### 6.1. Logs Estruturados JSON (`src/infrastructure/observability/`)
 - **Formato JSON Estruturado (`StructuredLogger`):** Cada linha emitida em `stdout`/`stderr` contém `timestamp`, `level`, `context`, `message`, `correlationId`, `walletId`, `transactionId` e `providerId`.
 - **Propagação Transparente (`CorrelationMiddleware` + `AsyncLocalStorage`):** O header `X-Correlation-Id` é capturado ou gerado na borda HTTP, devolvido na resposta e mantido vivo durante toda a execução da requisição.
 - **Sanitização de Dados Financeiros:** Chaves contendo valores monetários ou saldos (`amount`, `balance`, `balanceBefore`, `balanceAfter`, `money`, `cents`) são automaticamente removidas pelo `StructuredLogger` antes da serialização, prevenindo vazamento de dados financeiros sensíveis nos agregadores de logs.
+
+### 6.2. Métricas Operacionais (`MetricsService` & `GET /metrics`)
+A aplicação coleta métricas operacionais em memória via `MetricsService` (`src/infrastructure/observability/metrics.service.ts`) e as expõe em formato JSON estruturado no endpoint público `GET /metrics` (`MetricsController`):
+- **Transações por status (`transactionsByStatus`):** Contadores segregados para `PROCESSED`, `REJECTED` e `PENDING_REFERENCE`.
+- **Duplicatas detectadas (`duplicatesDetected`):** Contadores independentes para replays idempotentes na borda HTTP (`httpIdempotency`) e deduplicações no consumidor SQS (`sqsInbox`).
+- **Retries & DLQ (`retriesTotal`, `dlqMessagesTotal`):** Quantidade de tentativas de reprocessamento de transações `PENDING_REFERENCE` e mensagens encaminhadas para Dead-Letter Queue / rejeição definitiva.
+- **Contenção de Lock (`lockConflictsTotal`):** Contabiliza operações que sofreram espera relevante na aquisição do lock pessimista `FOR UPDATE` sobre a `WalletEntity`.
+- **Outbox Lag (`outboxLagSeconds`):** Diferença em segundos entre o timestamp atual e o `createdAt` da mensagem não publicada mais antiga na tabela `outbox_messages`.
+- **Latência de Processamento (`processingLatencyMs`):** Amostragem contínua com cálculo de média (`avg`) e percentil 95 (`p95`) em milissegundos, complementada por logs de alerta em caso de divergência na reconciliação (`reconciliationDivergencesTotal`).
+
+---
+
+## 7. Trade-offs e Limitações Conhecidas
+
+1. **Pessimistic Locking (`FOR UPDATE`) vs. Hot Wallets:**
+   - *Decisão:* Serializar operações por carteira no PostgreSQL garante consistência forte, zero *lost updates* e ausência de erros de conflito otimista sob rajadas concorrentes.
+   - *Limitação:* Se uma única carteira (*hot wallet*, como uma conta promocional ou de torneio) receber milhares de requisições simultâneas por segundo, formará fila de espera por lock no banco. Em escala extrema, seria necessário particionar filas em memória por `walletId` (actor model / single-writer por partição) antes do banco.
+2. **Transactional Outbox & Worker por Polling vs. CDC (Change Data Capture):**
+   - *Decisão:* O `OutboxRelayService` e o `PendingReferenceWorkerService` utilizam polling periódico com backoff exponencial, mantendo a arquitetura simples e sem acoplamento a conectores externos.
+   - *Limitação:* O polling introduz pequena latência de entrega (*outbox lag* proporcional ao intervalo do cron) e leituras periódicas no PostgreSQL. Em cenários de altíssimo throughput, a leitura direta do WAL via **CDC (Debezium / Kafka Connect)** reduziria o lag para milissegundos sem carga de polling.
+3. **Ledger de Partida Simples por Carteira vs. Partidas Dobradas (Double-Entry):**
+   - *Decisão:* Cada movimentação registra um lançamento imutável (`CREDIT` ou `DEBIT`) vinculado à carteira do jogador (`wallet_ledger_entries`), permitindo auditoria completa e reconciliação exata por `walletId`.
+   - *Limitação:* Não modela contas contábeis de contrapartida da casa (*house/operator clearing accounts*) em partidas dobradas completas, focando estritamente na integridade do saldo do jogador.
+4. **Autenticação No-Op no Ambiente de Avaliação:**
+   - *Decisão:* O `AuthGuard` global e o decorator `@Public()` estão integrados no pipeline HTTP do NestJS, mas retornam `true` sem validar assinaturas HMAC/JWT neste ambiente local para permitir a execução direta da suíte automatizada sem dependências externas de IdP/KMS.
